@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 内测版单独命名，桌面上与正式版可区分 -->
+    <string name="app_name">DeviceHud Debug</string>
+</resources>

@@ -31,13 +31,15 @@ cd bridge
 |---|---|---|
 | 网络 | 只 bind `127.0.0.1` | 局域网不可达 |
 | 身份 | 读 `/proc/net/tcp{,6}`，用连接四元组反查属主 uid | 别的应用连不进来 |
-| 包名 | uid → `/data/system/packages.list` 反查包名，必须等于 `com.zyxc.devicehud` | 伪造包名无效（客户端根本不传包名） |
+| 包名 | uid → `/data/system/packages.list` 反查包名，必须等于 `io.github.zuoyexingchen.devicehud`（内测版为 `.debug` 后缀，`bridge.sh` 会自动识别已安装的那个） | 伪造包名无效（客户端根本不传包名） |
 | 凭据 | 服务端下发 16 字节 nonce，客户端回 `HMAC-SHA256(nonce, token)` | 令牌永不上线，抓包无法重放 |
 | 爆破 | 失败 12 次进程自杀 | 暴力枚举无意义 |
 
 令牌由**应用自己生成**（32 hex），落在
-`/data/data/com.zyxc.devicehud/files/bridge.token`
-和 `/sdcard/Android/data/com.zyxc.devicehud/files/bridge.token`。
+`/data/data/io.github.zuoyexingchen.devicehud/files/bridge.token`
+和 `/sdcard/Android/data/io.github.zuoyexingchen.devicehud/files/bridge.token`。
+
+内测版把路径里的包名换成 `io.github.zuoyexingchen.devicehud.debug`。
 电脑侧脚本读它，再写进 `/data/local/tmp/devicehud_bridge.token`（600，应用读不到，也不进 cmdline）。
 这样避开了跨 uid 写文件的权限问题——方向是「应用写、电脑读」。
 

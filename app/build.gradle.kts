@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = "com.zyxc.devicehud"
+    namespace = "io.github.zuoyexingchen.devicehud"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.zyxc.devicehud"
+        applicationId = "io.github.zuoyexingchen.devicehud"
         minSdk = 30
         targetSdk = 36
         versionCode = 1
@@ -17,6 +17,9 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false
+            // 内测版：包名派生 .debug 后缀，可与正式版同时安装，数据互不干扰
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
         release {
             isMinifyEnabled = false

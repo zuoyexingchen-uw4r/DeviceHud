@@ -26,7 +26,9 @@ set -u
 export MSYS_NO_PATHCONV=1
 
 PORT="${BRIDGE_PORT:-47200}"
-PKG="com.zyxc.devicehud"
+# 正式包与内测包（.debug 后缀，由 applicationIdSuffix 派生）可同时安装在一个设备上
+PKG_BASE="io.github.zuoyexingchen.devicehud"
+PKG="$PKG_BASE"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SDK="${ANDROID_HOME:-/d/androidSDK}"
 ADB="$SDK/platform-tools/adb.exe"
@@ -40,15 +42,28 @@ REMOTE_TOKEN="/data/local/tmp/devicehud_bridge.token"
 REMOTE_DEX="/data/local/tmp/devicehud_bridge.dex"
 REMOTE_LOG="/data/local/tmp/devicehud_bridge.log"
 APP_TOKEN="/sdcard/Android/data/$PKG/files/bridge.token"
-MAIN_CLASS="com.zyxc.devicehud.bridge.ShellBridge"
+MAIN_CLASS="io.github.zuoyexingchen.devicehud.bridge.ShellBridge"
 
 die() { echo "!! $*" >&2; exit 1; }
 
 # 把 MSYS 路径转成 Windows 路径给 adb 当本地参数
 winpath() { cygpath -w "$1" 2>/dev/null || echo "$1"; }
 
+# 正式版优先，没装则回落到内测版
+resolve_pkg() {
+  local p
+  for p in "$PKG_BASE" "$PKG_BASE.debug"; do
+    if "$ADB" shell "pm list packages $p 2>/dev/null" \
+        | tr -d '\r' | grep -qx "package:$p"; then
+      printf '%s' "$p"; return 0
+    fi
+  done
+  printf '%s' "$PKG_BASE"
+}
+
 app_uid() {
-  "$ADB" shell "cmd package list packages -U 2>/dev/null | grep $PKG" \
+  # 用 -F 精确匹配：否则 devicehud 会把 devicehud.debug 一起捞出来
+  "$ADB" shell "cmd package list packages -U 2>/dev/null | grep -F 'package:$PKG '" \
     | tr -d '\r' | sed -n 's/.*uid:\([0-9]*\).*/\1/p' | head -1
 }
 
@@ -102,6 +117,8 @@ cmd_build() {
 cmd_start() {
   [ -f "$DEX_LOCAL" ] || cmd_build
   [ -x "$ADB" ] || die "找不到 adb: $ADB"
+  PKG="$(resolve_pkg)"
+  echo "== 目标应用：$PKG =="
 
   local token uid
   token="$(device_token)"
@@ -151,6 +168,7 @@ cmd_stop() {
 
 cmd_status() {
   local token py
+  PKG="$(resolve_pkg)"
   token="$(tr -d '\r\n' < "$TOKEN_LOCAL" 2>/dev/null || true)"
   py="$(command -v python3 || command -v python || true)"
 

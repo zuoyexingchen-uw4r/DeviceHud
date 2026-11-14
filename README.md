@@ -62,7 +62,17 @@ https://mirrors.cloud.tencent.com/gradle/gradle-9.6.0-bin.zip
 
 ## 使用
 
-1. 安装后首次打开，授予**悬浮窗权限**（也可以用 `adb shell appops set com.zyxc.devicehud SYSTEM_ALERT_WINDOW allow` 跳过手动点）
+仓库提供两种构建，包名不同，**可以同时装在一台手机上**：
+
+| 构建 | 包名 | 说明 |
+|---|---|---|
+| `assembleRelease` | `io.github.zuoyexingchen.devicehud` | 正式版 |
+| `assembleDebug` | `io.github.zuoyexingchen.devicehud.debug` | 内测版，桌面显示为 DeviceHud Debug |
+
+两者代码完全相同，debug 版只是通过 `applicationIdSuffix` 派生出独立包名，
+因此配置、数据互不干扰，也不会互相覆盖。
+
+1. 安装后首次打开，授予**悬浮窗权限**（也可以用 `adb shell appops set io.github.zuoyexingchen.devicehud SYSTEM_ALERT_WINDOW allow` 跳过手动点）
 2. Android 13+ 会再要一次通知权限（前台服务需要）
 3. 点「开启悬浮窗」，条子会出现
 4. 用方向键 / 摇杆把它挪到状态栏位置，点「贴顶」可自动对齐

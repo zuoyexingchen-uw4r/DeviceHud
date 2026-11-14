@@ -40,7 +40,7 @@
 | minSdk | 30（Android 11） |
 
 ```bash
-git clone https://github.com/<your-name>/DeviceHud.git
+git clone https://github.com/zuoyexingchen-uw4r/DeviceHud.git
 cd DeviceHud
 
 # 指向自己的 SDK

@@ -18,7 +18,7 @@
 #   ./bridge.sh log      看桥日志
 #   ./bridge.sh token    打印当前 token
 #
-# 环境变量：ANDROID_HOME（默认 /d/androidSDK）、BRIDGE_PORT（默认 47200）
+# 环境变量：ANDROID_HOME / ANDROID_SDK_ROOT 指向 SDK（都读不到时回落到常见位置）、BRIDGE_PORT（默认 47200）
 
 set -u
 
@@ -30,7 +30,8 @@ PORT="${BRIDGE_PORT:-47200}"
 PKG_BASE="io.github.zuoyexingchen.devicehud"
 PKG="$PKG_BASE"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SDK="${ANDROID_HOME:-/d/androidSDK}"
+# 依次尝试 ANDROID_HOME、ANDROID_SDK_ROOT，最后才回落到作者本机的习惯路径
+SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/d/androidSDK}}"
 ADB="$SDK/platform-tools/adb.exe"
 BUILD_TOOLS="$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)"
 JAVAC="${JAVAC:-javac}"

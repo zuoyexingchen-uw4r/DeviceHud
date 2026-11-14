@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  接管后的前台服务通知内容：
+    row1 = 前 3 个传感器的数据（与悬浮条同一套着色规则，间距压紧）
+    row2 = 关闭悬浮窗 / 打开应用 / 警报消除
+
+  两行都画在同一个 RemoteViews 里，而不是用系统 action 按钮 ——
+  系统的 action 在折叠态是看不见的，必须下拉通知才能点，体验差一截。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notif_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_notif_card"
+    android:orientation="vertical"
+    android:paddingLeft="12dp"
+    android:paddingTop="8dp"
+    android:paddingRight="12dp"
+    android:paddingBottom="9dp">
+
+    <TextView
+        android:id="@+id/notif_line"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:fontFamily="monospace"
+        android:includeFontPadding="false"
+        android:singleLine="true"
+        android:textColor="#F2E6EA"
+        android:textSize="12.5sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="7dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/notif_btn_toggle"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_marginEnd="5dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_notif_btn"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:singleLine="true"
+            android:text="关闭悬浮窗"
+            android:textColor="#C9BEC4"
+            android:textSize="10sp" />
+
+        <TextView
+            android:id="@+id/notif_btn_open"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_marginEnd="5dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_notif_btn"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:singleLine="true"
+            android:text="打开应用"
+            android:textColor="#C9BEC4"
+            android:textSize="10sp" />
+
+        <TextView
+            android:id="@+id/notif_btn_mute"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_notif_btn"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:singleLine="true"
+            android:text="警报消除"
+            android:textColor="#C9BEC4"
+            android:textSize="10sp" />
+    </LinearLayout>
+</LinearLayout>

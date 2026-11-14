@@ -1,0 +1,36 @@
+# ---------- Gradle ----------
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ---------- 本地环境配置（含本机 SDK 绝对路径，绝不能进仓库）----------
+local.properties
+
+# ---------- Android / IDE ----------
+.idea/
+*.iml
+.navigation/
+captures/
+.cxx/
+
+# ---------- 构建产物 ----------
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+output-metadata.json
+
+# ---------- bridge 运行时产物（token 属于凭据，绝不入库）----------
+bridge/out/
+bridge.token
+**/bridge.token
+*.token
+
+# ---------- 系统与编辑器杂项 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.swp
+*~

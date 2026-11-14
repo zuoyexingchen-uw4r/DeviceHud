@@ -1,0 +1,13 @@
+# 统一行尾。gradlew 若被转成 CRLF，在 Linux/macOS 上会报 "bad interpreter"
+* text=auto eol=lf
+
+gradlew text eol=lf
+*.sh    text eol=lf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.jar   binary
+*.keystore binary

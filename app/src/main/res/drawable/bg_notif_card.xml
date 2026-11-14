@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知里的深色数据卡：在任何系统深浅色下都保持 HUD 的观感 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#0F0E11" />
+    <corners android:radius="10dp" />
+    <stroke
+        android:width="1dp"
+        android:color="#26FFFFFF" />
+</shape>

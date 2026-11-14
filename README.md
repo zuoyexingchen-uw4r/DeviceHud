@@ -57,8 +57,42 @@ echo "sdk.dir=/path/to/Android/Sdk" > local.properties
 https://mirrors.cloud.tencent.com/gradle/gradle-9.6.0-bin.zip
 ```
 
-`release` 构建目前没有配签名，要出可安装的正式包需要自己加 `signingConfig`，
-或直接用 Android Studio 的签名向导。
+### 签名的 Release 构建
+
+release 签名从仓库根的 `keystore.properties` 读取，**该文件与 keystore 本身都不入库**：
+
+```properties
+storeFile=../keystore/devicehud-release.jks
+storePassword=******
+keyAlias=devicehud
+keyPassword=******
+```
+
+文件不存在时 `assembleRelease` 照常跑通，只是产出 `app-release-unsigned.apk`——
+所以别人克隆下来无需任何私密文件即可编译。
+
+自己生成一份密钥：
+
+```bash
+keytool -genkeypair -v \
+  -keystore keystore/devicehud-release.jks \
+  -storetype PKCS12 -alias devicehud \
+  -keyalg RSA -keysize 4096 -validity 10000 \
+  -dname "CN=DeviceHud, O=your-name, C=CN"
+```
+
+> ⚠️ **keystore 丢失 = 永远无法给已发布的版本推升级。**
+> Android 靠签名证书判断「是不是同一个应用」，证书变了系统就当成另一个 App。
+> 请离线备份（网盘 / 密码管理器），切勿提交到仓库。
+
+CI 签名需要四个 Secrets，未配置时自动跳过 release 构建：
+
+| Secret | 内容 |
+|---|---|
+| `KEYSTORE_BASE64` | `base64 -w0 keystore/devicehud-release.jks` 的输出 |
+| `KEYSTORE_PASSWORD` | storePassword |
+| `KEY_ALIAS` | keyAlias |
+| `KEY_PASSWORD` | keyPassword |
 
 ## 使用
 

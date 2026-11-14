@@ -21,6 +21,13 @@ captures/
 *.class
 output-metadata.json
 
+# ---------- 签名材料：绝不入库 ----------
+# 泄露 keystore 等同泄露应用身份；丢失则永远无法给已发布版本升级
+keystore.properties
+*.jks
+*.keystore
+*.p12
+
 # ---------- bridge 运行时产物（token 属于凭据，绝不入库）----------
 bridge/out/
 bridge.token

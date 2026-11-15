@@ -116,10 +116,27 @@ id|label|unit|kind|arg|decimals|role|color|textSp|bold|italic
 
 ### 4.3 采样与刷新是解耦的
 
-- `Sampler` 负责按"采样间隔"去读 `/sys`、`/proc`
-- `HudView` 按"刷新间隔"重绘
+- `Sampler` 负责按"采样间隔"（`HudState.sampleMs`，0.1s~5s）去读 `/sys`、`/proc`
+- `HudView` 按"刷新间隔"（`HudState.updateMs`，0.2s~60s）重绘
 
-两者独立可配（0.5s~60s）。采样快、刷新慢时，显示的是这个窗口内的**均值**而不是最后一刻的瞬时值——这是刻意的，避免数字乱跳。
+两者**互不约束**，任意组合都允许，行为约定如下：
+
+| 组合 | 上屏行为 |
+|---|---|
+| 采样快、刷新慢 | 显示该刷新窗口内所有采样点的**均值**，不是最后一刻的瞬时值——刻意的，避免数字乱跳 |
+| 采样慢、刷新快 | 读数值保持到下一次采样，**不允许退回 `--`** |
+
+第二条是硬约束。`HudService.renderLoop` 里必须把这一区间内没采到新值的通道用 `lastValues` 补齐：
+
+```java
+for (Map.Entry<String, Float> e : lastValues.entrySet()) {
+    if (!avg.containsKey(e.getKey())) avg.put(e.getKey(), e.getValue());
+}
+```
+
+删掉这段的话，采样 5s + 刷新 0.2s 时整条 HUD 会周期性全变 `--`（踩过）。
+
+另外 `DataCollector` 里电池 / 温度 / 内存这些"慢变量"是按**时间**分频的（电池与内存 2s、温度 1s），不是按帧数——按帧数分频会导致采样率调到 0.1s 时 sysfs / binder 的 IO 翻五倍。
 
 ### 4.4 高权限数据通道
 
@@ -232,6 +249,10 @@ cd bridge
 4. **横屏大屏上柱宽会被撑爆**：`slot * 0.62` 在 3392px 宽屏上算出来是 263px。柱宽和圆角半径都**必须封顶**（现在封到 16dp）。
 5. **平板横屏要限宽**：内容不限宽会被拉成面条，现在限制 760dp 居中。
 6. **改 `SensorSpec` 的字段顺序会破坏已有用户的持久化数据**。如果必须改，在 `SensorTable.load` 里做兼容处理，否则老用户升级后传感器表会解析失败。
+7. **背景图必须存进应用私有目录**（`files/bar_bg.img`），不要只存相册的 `content://`。SAF 的持久化授权在重装 APK 后一定失效，用户之前选的图会**静默消失**。旧配置由 `BgImage.migrate()` 在启动时补一份副本。
+8. **私有副本文件名固定，所以 `BgImage` 的缓存 key 必须带文件 mtime**。否则换图后 uri 没变，条上还是旧图。
+9. **`CropView.crop()` 不能用 `createBitmap(src, x, y, w, h)`**。那个 API 只能截源图**内部**的矩形，装不下"图片缩小后比裁剪窗口小、空出来的地方应当透明"这种语义。现在改成画布合成：新建 `ARGB_8888` → `CLEAR` → 用 Matrix 把"窗口在源图上的矩形"铺到画布，画不到的地方天然透明。
+10. **`BgImage` 换图时只丢缓存引用，不要 `recycle()`**。悬浮窗的 `HudView` 可能还握着那张位图，回收掉会在下一次绘制时炸 `trying to use a recycled bitmap`。
 
 ---
 

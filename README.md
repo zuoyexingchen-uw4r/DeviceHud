@@ -17,7 +17,7 @@
 - **位置可调**：方向键 1px 步进、摇杆按幅度 1~6px/帧，带浮点累积，不会因为取整丢步
 - **5 套配色**：INK / AMBER / ICE / MONO / PHOSPHOR，只换颜色不改排版
 - **自定义背景图**：可以从相册选图并裁切，条子底下垫自己的壁纸
-- **采样与刷新解耦**：采样 0.5s~60s、界面刷新 0.2s~60s 各自独立，采样快刷新慢时显示窗口均值
+- **采样与刷新解耦**：采样 0.1s~5s、界面刷新 0.2s~60s 各自独立，采样快刷新慢时显示窗口均值
 - **蓝牙电量**：读已配对耳机的剩余电量
 - **开机自启**（可选）
 
@@ -146,7 +146,7 @@ cd bridge
 ## 工程结构
 
 ```
-app/src/main/java/com/zyxc/devicehud/
+app/src/main/java/io/github/zuoyexingchen/devicehud/
 ├── MainActivity.java        主界面 / 所有设置项
 ├── HudService.java          前台服务，持有 overlay
 ├── HudView.java             悬浮条自绘

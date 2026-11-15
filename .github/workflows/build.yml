@@ -7,13 +7,58 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      publish_alpha:
+        description: '构建完成后发布 alpha 预发行版（任何人可下载，不登录）'
+        type: boolean
+        default: false
+      release_tag:
+        description: '版本号，如 v0.1.0-alpha.1（留空则自动生成 alpha-<日期-时间>）'
+        type: string
+        required: false
+  schedule:
+    # UTC 16:30 = 北京时间次日 00:30。有变更才构建并发布，无变更直接跳过。
+    # 注意：GitHub 的定时任务在负载高峰可能延迟几分钟到几十分钟。
+    - cron: '30 16 * * *'
 
 permissions:
   contents: read
 
 jobs:
+  # 定时触发时先判断有没有新东西，避免每天都发一个内容相同的 alpha
+  detect:
+    name: Check for changes
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要完整 tag 历史才能比较
+
+      - name: Compare with last release tag
+        id: check
+        run: |
+          LAST=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -z "$LAST" ]; then
+            echo "尚无历史 tag，视为有变更"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            N=$(git rev-list "$LAST..HEAD" --count)
+            echo "上次发布: $LAST，之后新增 $N 个提交"
+            if [ "$N" -gt 0 ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
   build:
-    name: Assemble debug APK
+    name: Assemble APK
+    needs: [detect]
+    if: always() && (github.event_name != 'schedule' || needs.detect.outputs.changed == 'true')
     runs-on: ubuntu-latest
 
     steps:
@@ -21,7 +66,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -96,3 +141,67 @@ jobs:
           name: DeviceHud-release
           path: app/build/outputs/apk/release/*.apk
           retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 发布：把 artifact 转成真正的 GitHub Release（无需登录即可下载，且不会过期）
+  # 触发条件：推送 v* 标签，或手动 dispatch 时勾选 publish_alpha
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish alpha release
+    needs: [build]
+    if: |
+      !cancelled() && needs.build.result == 'success' && (
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.publish_alpha == true) ||
+        startsWith(github.ref, 'refs/tags/v')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="alpha-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "本次发布: $TAG"
+
+      - name: Create prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: DeviceHud ${{ steps.meta.outputs.tag }}
+          prerelease: true
+          generate_release_notes: true
+          files: dist/**/*.apk
+          body: |
+            > **Alpha 预发行版**，仅用于尝鲜与测试，功能和行为都可能随时变动。
+
+            ## 两个包的区别
+
+            | 文件 | 包名 | 说明 |
+            |---|---|---|
+            | `app-release.apk` | `io.github.zuoyexingchen.devicehud` | 正式签名，可覆盖升级 |
+            | `app-debug.apk` | `io.github.zuoyexingchen.devicehud.debug` | 内测版，桌面显示 DeviceHud Debug |
+
+            两个包**可以同时安装**，配置互不干扰。
+
+            ## 安装
+
+            下载对应 APK 后直接安装。首次打开需要授予悬浮窗权限；
+            Android 13+ 还会请求通知权限（前台服务需要）。
+
+            想拿到真实 CPU 占用率，需要额外安装 [Shizuku](https://shizuku.rikka.app/)
+            并在应用内授权，或使用仓库 `bridge/` 下的有线旁路方案。

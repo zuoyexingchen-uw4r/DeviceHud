@@ -27,6 +27,16 @@
 |---|---|
 | ![main](docs/screenshot-main.png) | ![settings](docs/screenshot-settings.png) |
 
+## 下载
+
+从 **[Releases](https://github.com/zuoyexingchen-uw4r/DeviceHud/releases)** 下载最新的 alpha 预发行版，
+无需登录 GitHub：
+
+| 文件 | 说明 |
+|---|---|
+| `app-release.apk` | 正式签名版，包名 `io.github.zuoyexingchen.devicehud` |
+| `app-debug.apk` | 内测版，包名带 `.debug`，可与正式版共存 |
+
 ## 构建
 
 **环境**

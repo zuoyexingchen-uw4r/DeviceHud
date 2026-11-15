@@ -172,6 +172,12 @@ bridge/                      电脑侧旁路 shell 桥
 - [Shizuku](https://github.com/RikkaApps/Shizuku)（RikkaApps，Apache-2.0）—— 高权限通道
 - 数据源与探针命名的经验来自 AOSP 与各家 ROM 的 `thermal_zone` 实践
 
+## 开发
+
+要改代码或接手维护，先读 **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**：
+里面有代码地图、核心机制说明、CI 与签名流程，以及一批真机适配踩过的坑
+（比如为什么 `trip` 热区必须跳过、为什么悬浮窗 `y=0` 时 dumpsys 坐标是负数却是对的）。
+
 ## License
 
 [MIT](LICENSE)

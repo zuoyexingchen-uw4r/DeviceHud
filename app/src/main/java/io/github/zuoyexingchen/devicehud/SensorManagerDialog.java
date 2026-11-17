@@ -231,7 +231,72 @@ public final class SensorManagerDialog {
             refresh.run();
         }));
 
+        row.addView(deleteKey(act, host, sp, refresh));
+
         return row;
+    }
+
+    /**
+     * 删除按钮。
+     *
+     * <p>之前只有"取消勾选"，图表一旦加进表里就永远留在列表里 —— 加错了只能看着。
+     * 插件指标不能真删：{@code SensorTable.ensurePlugins} 每次加载都会按插件文件
+     * 走一遍双向同步，删掉的和文件里不一致，下次启动又会被加回来。所以这里
+     * 只给提示，让它去改插件文件。
+     */
+    private static View deleteKey(final Activity act, final Host host,
+                                  final SensorSpec sp, final Runnable refresh) {
+        float dp = act.getResources().getDisplayMetrics().density;
+
+        TextView tv = new TextView(act);
+        tv.setText("\u2715");
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextColor(0xFFB0676F);
+        tv.setGravity(Gravity.CENTER);
+        tv.setBackground(round(BG_ROW, 9 * dp, 0x1FFFFFFF, dp));
+        tv.setLayoutParams(new LinearLayout.LayoutParams(i(dp, 34), i(dp, 38)));
+
+        tv.setOnClickListener(v -> {
+            if (sp.kind == SensorSpec.Kind.PLUGIN || sp.kind == SensorSpec.Kind.SHELL) {
+                Toast.makeText(act,
+                        "插件指标由插件文件决定：删掉下次加载会被重新加回来。\n"
+                                + "要移除请改插件文件里的指标声明，或直接删掉插件。",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            final List<String> ids = new ArrayList<>(host.enabled());
+            if (ids.contains(sp.id) && ids.size() <= 1) {
+                Toast.makeText(act, "至少保留一项", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            new AlertDialog.Builder(act)
+                    .setTitle("删除这一项？")
+                    .setMessage(sp.displayTitle()
+                            + "\n\n只影响悬浮条上的排布。内置项可以用顶部「重建表」恢复。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("删除", (d, w) -> {
+                        // 蓝牙项要额外记一笔：不记的话下一次蓝牙广播就把它补回来了
+                        if (sp.kind == SensorSpec.Kind.BT_BATT) {
+                            SensorTable.hideBt(act, sp.id);
+                        }
+                        ids.remove(sp.id);
+                        List<SensorSpec> t = host.table();
+                        for (int k = 0; k < t.size(); k++) {
+                            if (t.get(k).id.equals(sp.id)) {
+                                t.remove(k);
+                                break;
+                            }
+                        }
+                        host.onTableChanged(t);
+                        host.onEnabledChanged(ids);
+                        refresh.run();
+                    })
+                    .show();
+        });
+        return tv;
     }
 
     private static TextView moveKey(Activity act, String glyph, View.OnClickListener l) {
@@ -467,6 +532,7 @@ public final class SensorManagerDialog {
         final EditText minIn;
         final EditText maxIn;
         final EditText pointsIn;
+        final EditText strokeIn;
         final CheckBox manual;
         if (chart) {
             box.addView(label(act, "数据源"));
@@ -503,10 +569,19 @@ public final class SensorManagerDialog {
             pointsIn.setInputType(InputType.TYPE_CLASS_NUMBER);
             box.addView(label(act, "保留点数"));
             box.addView(pointsIn);
+
+            // 线宽：胶囊只有 20dp 高，可调范围卡在 0.8~6dp，
+            // 再粗就不是"曲线"而是实心块了
+            strokeIn = input(act, "线宽 dp（0.8~6）", trimFloat(sp.chartStroke));
+            strokeIn.setInputType(InputType.TYPE_CLASS_NUMBER
+                    | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+            box.addView(label(act, "线宽"));
+            box.addView(strokeIn);
         } else {
             minIn = null;
             maxIn = null;
             pointsIn = null;
+            strokeIn = null;
             manual = null;
         }
 
@@ -613,6 +688,11 @@ public final class SensorManagerDialog {
                             sp.chartPoints = Math.max(8, Math.min(ChartHistory.CAPACITY, n));
                         } catch (Exception ignored) {
                         }
+                        try {
+                            float sw = Float.parseFloat(strokeIn.getText().toString().trim());
+                            sp.chartStroke = Math.max(0.8f, Math.min(6f, sw));
+                        } catch (Exception ignored) {
+                        }
                     }
 
                     host.onTableChanged(host.table());
@@ -625,6 +705,12 @@ public final class SensorManagerDialog {
     }
 
     // ------------------------------------------------------------------ 小工具
+
+    /** 1.4 显示成 "1.4"，2.0 显示成 "2"，省得用户以为是两个不同的值 */
+    private static String trimFloat(float v) {
+        if (Math.abs(v - Math.round(v)) < 0.001f) return String.valueOf(Math.round(v));
+        return String.format(java.util.Locale.US, "%.1f", v);
+    }
 
     private static EditText input(Activity act, String hint, String value) {
         EditText e = new EditText(act);

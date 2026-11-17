@@ -102,6 +102,14 @@ public class MainActivity extends Activity {
     private final Map<String, TextView> cardValues = new HashMap<>();
     private final List<TextView> rateChips = new ArrayList<>();
     private final List<TextView> sampleChips = new ArrayList<>();
+    /** 主题档位 chip（最后一格是 CUSTOM） */
+    private final List<TextView> themeChips = new ArrayList<>();
+    private TextView accentBtn;
+    private TextView bgBtn;
+    private TextView fontStatus;
+    /** 预览区的内容容器（默认收起）与表头 */
+    private LinearLayout previewBody;
+    private TextView previewHead;
     /** 是否走三列布局（横屏 / 平板） */
     private boolean wideLayout = false;
     /** 左列"传感器 → 实时值"行 */
@@ -334,15 +342,39 @@ public class MainActivity extends Activity {
         col.addView(sub);
     }
 
+    /**
+     * 预览区。
+     *
+     * <p>默认**收起**：设置页真正要用的是下面的参数，而不是一条和悬浮条一模一样的
+     * 条子 —— 站内预览永远模拟不出"压在状态栏底下"的真实观感，那个交给全屏预览。
+     * 收起后只留一行摘要，点一下才展开。
+     */
     private void buildPreview(LinearLayout col) {
-        sectionLabel(col, "PREVIEW");
+        previewHead = new TextView(this);
+        previewHead.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
+        previewHead.setTypeface(Typeface.MONOSPACE);
+        previewHead.setTextColor(TEXT_DIM);
+        previewHead.setLetterSpacing(0.18f);
+        previewHead.setPadding(dp(2), dp(10), 0, dp(10));
+        previewHead.setOnClickListener(v -> {
+            boolean open = previewBody.getVisibility() == View.VISIBLE;
+            previewBody.setVisibility(open ? View.GONE : View.VISIBLE);
+            updatePreviewHead(!open);
+        });
+        col.addView(previewHead);
+
+        previewBody = new LinearLayout(this);
+        previewBody.setOrientation(LinearLayout.VERTICAL);
+        // 收起状态只占一行高度，展开才有内容
+        previewBody.setVisibility(View.GONE);
+        col.addView(previewBody, matchWrap());
 
         FrameLayout frame = new FrameLayout(this);
         frame.setBackground(roundRect(0xFF0F0E11, 14f, 0x14FFFFFF));
         frame.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         preview = new HudView(this);
-        preview.setTheme(HudTheme.byIndex(HudState.themeIndex));
+        preview.setTheme(HudTheme.current());
         preview.setSensors(activeSensors);
         preview.setInsets(HudState.insetLeft, HudState.insetRight);
         preview.setTextSizeSp(HudState.textSizeSp);
@@ -351,20 +383,31 @@ public class MainActivity extends Activity {
         // 点预览直接进全屏：设置页那条永远看不出"和状态栏叠在一起"的效果
         frame.setOnClickListener(v -> FullScreenPreview.show(this));
 
-        col.addView(frame, new LinearLayout.LayoutParams(
+        previewBody.addView(frame, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         posText = new TextView(this);
         posText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
         posText.setTextColor(0xFF3E383D);
         posText.setTypeface(Typeface.MONOSPACE);
-        posText.setPadding(dp(2), dp(7), 0, dp(16));
-        col.addView(posText);
+        posText.setPadding(dp(2), dp(7), 0, dp(10));
+        previewBody.addView(posText);
 
         cardsBox = new LinearLayout(this);
         cardsBox.setOrientation(LinearLayout.VERTICAL);
-        col.addView(cardsBox);
+        previewBody.addView(cardsBox);
         rebuildCards();
+
+        updatePreviewHead(false);
+    }
+
+    /** 表头：收起时显示摘要，展开时变成"点击收起" */
+    private void updatePreviewHead(boolean open) {
+        if (previewHead == null) return;
+        String size = previewWidthPx() + " \u00D7 " + dp(HudState.barHeightDp);
+        previewHead.setText((open ? "PREVIEW  \u25BE  点击收起" : "PREVIEW  \u25B8  " + size)
+                + "  \u00B7  " + HudTheme.current().name);
+        previewHead.setTextColor(open ? ACCENT : TEXT_DIM);
     }
 
     /** 卡片随传感器选择重建，最多铺两列 */
@@ -904,6 +947,7 @@ public class MainActivity extends Activity {
     private static final int REQ_IMPORT_SETTINGS = 0x4C2;
     private static final int REQ_EXPORT_HISTORY = 0x4C3;
     private static final int REQ_IMPORT_PLUGIN = 0x4C4;
+    private static final int REQ_IMPORT_FONT = 0x4C5;
 
     /** 源图解码长边上限：再大就只是白占内存，条上根本用不到 */
     private static final int SOURCE_MAX_DIM = 3200;
@@ -944,6 +988,10 @@ public class MainActivity extends Activity {
         }
         if (requestCode == REQ_IMPORT_PLUGIN) {
             if (picked != null) doImportPlugin(picked);
+            return;
+        }
+        if (requestCode == REQ_IMPORT_FONT) {
+            if (picked != null) doImportFont(picked);
             return;
         }
         if (requestCode == REQ_EXPORT_HISTORY) {
@@ -1195,7 +1243,9 @@ public class MainActivity extends Activity {
                 HudState.themeIndex = idx;
                 Prefs.setThemeIndex(this, idx);
                 HudState.bump();
+                refreshThemeChips();
             });
+            themeChips.add(btn);
 
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
                     ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -1203,7 +1253,54 @@ public class MainActivity extends Activity {
             row.addView(btn, lp);
         }
 
-        col.addView(row);
+        // 自定义档单独一行：它下面还有两个取色按钮，塞进上面那排会挤成一团
+        TextView customChip = new TextView(this);
+        customChip.setText("CUSTOM");
+        customChip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
+        customChip.setTypeface(Typeface.MONOSPACE);
+        customChip.setGravity(Gravity.CENTER);
+        customChip.setPadding(0, dp(10), 0, dp(10));
+        customChip.setOnClickListener(v -> {
+            HudState.themeIndex = HudTheme.CUSTOM_INDEX;
+            Prefs.setThemeIndex(this, HudTheme.CUSTOM_INDEX);
+            HudState.bump();
+            refreshThemeChips();
+        });
+        themeChips.add(customChip);
+
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = dp(4);
+        col.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        col.addView(customChip, clp);
+
+        // 自定义色：只开放强调色和底色，文字色按底色亮度自动派生
+        LinearLayout pickRow = new LinearLayout(this);
+        pickRow.setOrientation(LinearLayout.HORIZONTAL);
+        accentBtn = smallButton("强调色", v -> pickColor("强调色", HudState.customAccent, false, c -> {
+            if (c == 0) return;                       // 0 = 取消，不改
+            HudState.customAccent = c;
+            Prefs.setCustomAccent(this, c);
+            selectCustomTheme();
+        }));
+        bgBtn = smallButton("底色", v -> pickColor("底色", HudState.customBg, true, c -> {
+            if (c == 0) return;
+            HudState.customBg = c;
+            Prefs.setCustomBg(this, c);
+            selectCustomTheme();
+        }));
+        pickRow.addView(accentBtn, weightLp());
+        pickRow.addView(bgBtn, weightLp());
+        col.addView(pickRow);
+
+        TextView pickNote = new TextView(this);
+        pickNote.setText("文字色按底色亮度自动取深/浅，避免浅底浅字");
+        pickNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        pickNote.setTextColor(0xFF3E383D);
+        pickNote.setTypeface(Typeface.MONOSPACE);
+        pickNote.setPadding(dp(2), dp(6), 0, dp(14));
+        col.addView(pickNote);
 
         // 主题一键覆盖：清掉所有单项样式，全部回到跟随主题
         TextView unify = smallButton("统一样式（清空所有单项覆盖）", v -> {
@@ -1220,7 +1317,131 @@ public class MainActivity extends Activity {
         col.addView(unify, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        col.addView(spacer(16));
+        buildFont(col);
+        refreshThemeChips();
+    }
+
+    /**
+     * 选中自定义主题并立刻生效。
+     *
+     * <p>取色面板只能在"选中 CUSTOM"时有意义，所以点任一色块都顺手把档位切过去 ——
+     * 用户改完颜色发现没变化，比"改错了色"更让人困惑。
+     */
+    private void selectCustomTheme() {
+        HudState.themeIndex = HudTheme.CUSTOM_INDEX;
+        Prefs.setThemeIndex(this, HudTheme.CUSTOM_INDEX);
+        HudState.bump();
+        applyLayoutToPreview();
+        refreshThemeChips();
+    }
+
+    private void refreshThemeChips() {
+        if (themeChips.isEmpty()) return;
+        for (int i = 0; i < HudTheme.ALL.length; i++) {
+            HudTheme t = HudTheme.ALL[i];
+            boolean on = HudState.themeIndex == i;
+            TextView btn = themeChips.get(i);
+            btn.setTextColor(t.accent);
+            btn.setBackground(roundRect(t.bg, 11f, on ? t.accent : t.stroke));
+        }
+
+        TextView chip = themeChips.get(themeChips.size() - 1);
+        HudTheme cus = HudTheme.custom(HudState.customAccent, HudState.customBg);
+        boolean on = HudTheme.isCustom();
+        chip.setTextColor(cus.accent);
+        chip.setBackground(roundRect(cus.bg, 11f, on ? cus.accent : 0x33FFFFFF));
+        chip.setAlpha(on ? 1f : 0.55f);
+
+        if (accentBtn != null) {
+            accentBtn.setText(String.format(Locale.US, "强调 %06X",
+                    HudState.customAccent & 0xFFFFFF));
+            accentBtn.setTextColor(HudState.customAccent);
+            bgBtn.setText(String.format(Locale.US, "底色 %08X", HudState.customBg));
+        }
+    }
+
+    // ------------------------------------------------------------------ 字体
+
+    private void buildFont(LinearLayout col) {
+        sectionLabel(col, "FONT");
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(smallButton("选择 ttf…", v -> pickFont()), weightLp());
+        row.addView(smallButton("系统等宽", v -> {
+            HudFont.clear(this);
+            HudState.bump();
+            applyLayoutToPreview();
+            refreshFontStatus();
+            Toast.makeText(this, "已恢复系统等宽字体", Toast.LENGTH_SHORT).show();
+        }), weightLp());
+        col.addView(row);
+
+        fontStatus = new TextView(this);
+        fontStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        fontStatus.setTypeface(Typeface.MONOSPACE);
+        fontStatus.setPadding(dp(2), dp(7), 0, dp(2));
+        col.addView(fontStatus);
+
+        TextView note = new TextView(this);
+        note.setText("选中的字体文件会复制进应用私有目录（不占相册、不需要存储权限）。\n"
+                + "建议用等宽字体：数值每秒都在变，非等宽会让整条左右抖动。");
+        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        note.setTextColor(0xFF3E383D);
+        note.setTypeface(Typeface.MONOSPACE);
+        note.setPadding(dp(2), dp(4), 0, dp(16));
+        col.addView(note);
+
+        refreshFontStatus();
+    }
+
+    private void refreshFontStatus() {
+        if (fontStatus == null) return;
+        if (HudFont.has(this)) {
+            java.io.File f = HudFont.file(this);
+            fontStatus.setText(String.format(Locale.US,
+                    "\u25CF 自定义字体 · %d KB%s", f.length() / 1024,
+                    HudFont.lastLoadFailed() ? " · 加载失败，已回落系统字体" : ""));
+            fontStatus.setTextColor(HudFont.lastLoadFailed() ? 0xFFFFB74D : ACCENT);
+        } else {
+            fontStatus.setText("\u25CB 系统等宽（MONOSPACE）");
+            fontStatus.setTextColor(TEXT_DIM);
+        }
+    }
+
+    private void pickFont() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            // 不收窄 MIME：ttf 的注册类型在各家文件管理器里五花八门，
+            // 写死 font/ttf 会让一部分机器里根本选不到文件
+            i.setType("*/*");
+            startActivityForResult(i, REQ_IMPORT_FONT);
+        } catch (Exception e) {
+            Toast.makeText(this, "打不开文件选择器：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void doImportFont(final Uri uri) {
+        new Thread(() -> {
+            String err = null;
+            try {
+                HudFont.install(this, uri);
+            } catch (Exception e) {
+                err = e.getMessage();
+            }
+            final String ferr = err;
+            runOnUiThread(() -> {
+                if (ferr != null) {
+                    Toast.makeText(this, "字体导入失败：" + ferr, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                HudState.bump();
+                applyLayoutToPreview();
+                refreshFontStatus();
+                Toast.makeText(this, "字体已应用", Toast.LENGTH_SHORT).show();
+            });
+        }, "font-import").start();
     }
 
     // ------------------------------------------------------------------ 悬浮窗控制
@@ -1851,7 +2072,7 @@ public class MainActivity extends Activity {
     }
 
     private void applyLayoutToPreview() {
-        preview.setTheme(HudTheme.byIndex(HudState.themeIndex));
+        preview.setTheme(HudTheme.current());
         preview.setTextSizeSp(HudState.textSizeSp);
         preview.setInsets(HudState.insetLeft, HudState.insetRight);
         preview.setShowBackground(HudState.showBackground);
@@ -1871,6 +2092,7 @@ public class MainActivity extends Activity {
             lp.height = dp(HudState.barHeightDp);
             preview.setLayoutParams(lp);
         }
+        updatePreviewHead(previewBody != null && previewBody.getVisibility() == View.VISIBLE);
     }
 
     private void refreshData() {
@@ -1922,7 +2144,8 @@ public class MainActivity extends Activity {
                 tv.setTextColor(colorFor(se, v, s.charging, th));
             }
 
-            posText.setText(String.format(Locale.US,
+            // 预览收起时别白算这行字符串（每秒都在刷）
+            if (posText != null && posText.isShown()) posText.setText(String.format(Locale.US,
                     "x %d   y %d   %s   %d\u00B0c\u00B7%d probes",
                     HudState.x, HudState.y,
                     s.charging ? "charging" : "discharging",

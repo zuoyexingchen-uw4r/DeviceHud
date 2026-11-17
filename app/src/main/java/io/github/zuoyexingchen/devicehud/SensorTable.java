@@ -300,6 +300,8 @@ public final class SensorTable {
 
     /** 用户手动重建：重新扫描整机并覆盖旧表 */
     public static List<SensorSpec> rebuild(Context c) {
+        // 重建是一次"回到出厂"的操作，之前手动删掉的蓝牙项也一并恢复
+        Prefs.setBtHidden(c, "");
         List<SensorSpec> t = probe();
         save(c, t);
         Prefs.setTableVersion(c, TABLE_VERSION);
@@ -356,6 +358,8 @@ public final class SensorTable {
         boolean changed = false;
         for (BtBattery.Dev d : devs) {
             String id = BtBattery.idOf(d.address);
+            // 用户主动删掉的设备不再自动补回来，否则删了等于没删
+            if (btHidden(c, id)) continue;
             String full = d.name == null ? "" : d.name.trim();
             String shortName = BtBattery.shortName(full);
 
@@ -384,6 +388,25 @@ public final class SensorTable {
         if (!changed) return null;
         save(c, out);
         return out;
+    }
+
+    /** 记下"这一项被用户删了"，避免下一次蓝牙广播又把它补回表里 */
+    public static void hideBt(Context c, String id) {
+        String cur = Prefs.btHidden(c);
+        if (cur == null) cur = "";
+        for (String s : cur.split(",")) {
+            if (s.equals(id)) return;
+        }
+        Prefs.setBtHidden(c, cur.isEmpty() ? id : cur + "," + id);
+    }
+
+    private static boolean btHidden(Context c, String id) {
+        String cur = Prefs.btHidden(c);
+        if (cur == null || cur.isEmpty()) return false;
+        for (String s : cur.split(",")) {
+            if (s.equals(id)) return true;
+        }
+        return false;
     }
 
     private static SensorSpec findById(List<SensorSpec> list, String id) {

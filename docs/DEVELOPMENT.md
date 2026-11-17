@@ -158,6 +158,8 @@ for (Map.Entry<String, Float> e : lastValues.entrySet()) {
 
 主界面按草图分成 `preview` + 三列（`EDIT COLUMN` / `PLACE EDIT` + `BACKGROUND & COLOUR` / `ADVANCED SETTINGS`）+ 底部悬浮按钮条。屏宽 ≥ 700dp 才并排，否则竖向堆叠。
 
+`PREVIEW` 那块**默认收起**（只留一行摘要：尺寸 + 主题名，点一下展开）。站内预览永远模拟不出"压在状态栏底下"的观感，那个交给全屏预览；把它一直摊开只是白占首屏。
+
 > **竖向堆叠时列宽必须用 `MATCH_PARENT`，不能抄横向那套 `width=0 + weight`。** 竖向布局里 weight 分的是高度，宽度会直接变 0，整块内容凭空消失而且不报错。
 
 ### 4.6 曲线 / 历史 / 导入导出 / 插件
@@ -314,6 +316,9 @@ cd bridge
 8. **私有副本文件名固定，所以 `BgImage` 的缓存 key 必须带文件 mtime**。否则换图后 uri 没变，条上还是旧图。
 9. **`CropView.crop()` 不能用 `createBitmap(src, x, y, w, h)`**。那个 API 只能截源图**内部**的矩形，装不下"图片缩小后比裁剪窗口小、空出来的地方应当透明"这种语义。现在改成画布合成：新建 `ARGB_8888` → `CLEAR` → 用 Matrix 把"窗口在源图上的矩形"铺到画布，画不到的地方天然透明。
 10. **`BgImage` 换图时只丢缓存引用，不要 `recycle()`**。悬浮窗的 `HudView` 可能还握着那张位图，回收掉会在下一次绘制时炸 `trying to use a recycled bitmap`。
+11. **"某一帧没采到值"和"这个通道现在是未知"是两件事**。`HudService.renderLoop` 会用 `lastValues` 补上缺席的通道（否则刷新比采样快时会整屏闪 `--`），但这会导致**通道永久变成未知之后仍然显示最后一次的值** —— 蓝牙手写笔没电关机后条上一直挂着 1% 就是这么来的。现在 `Sampler.Acc` 记 `nanCount`：整个区间一次有效值都没有就显式给出 `NaN`，上层照常显示 `--`。
+12. **离散量不能做区间平均**。蓝牙电量这种状态量被平均会得到 0.5，再被 `%.0f` 四舍五入成 1% —— 永远差一格且"归零后仍是 1%"。`Sensor.isDiscrete()` 为真的通道在 `Sampler.take()` 里取**最后一次**值。
+13. **广播值优先于系统缓存**。`BtBattery` 里广播（设备主动上报）和 `getBatteryLevel()` 反射（系统缓存）是两条来源，缓存会慢一拍或者自己取整。`Dev.fromBroadcast` + `BROADCAST_TTL` 决定谁能覆盖谁；ACL 断开时把电量标成未知，免得"设备已经关了还挂着旧百分比"。
 
 ---
 
@@ -322,6 +327,13 @@ cd bridge
 **加一个指标**：`Sensor.Kind` 加枚举 → `SensorSpec` 里描述它 → `SensorTable.probe()` 里探测并把 spec 加进表 → `Sensor.read()` 里实现读取。UI 不用动，它会自动出现在「管理传感器」里。
 
 **加一套配色**：`HudTheme` 里加一个枚举项，定义前景/背景/强调色即可，排版不用管。
+
+**自定义主题**：`HudTheme.CUSTOM_INDEX`（= `ALL.length`）是保留档位，`byIndex()` 遇到它就调 `custom(accent, bg)`。只开放**强调色**和**底色**两个自由度，文字/次文字/描边按底色亮度自动派生 —— 全开放必然出现浅底浅字。`custom()` 带一层缓存，因为它在渲染路径上每帧每项都会被调用。
+
+**自定义字体**：`HudFont` 把用户选的 ttf 复制成 `files/hud_font.ttf`（固定名，覆盖写），`HudView.baseTypeface()` 读它，失败回落到 `MONOSPACE`。注意：
+- `Typeface.createFromFile()` 只吃**文件路径**，直接给 SAF 的 `content://` 会抛异常，所以必须先落地。
+- 落地前先试加载一遍，加载不了就不落盘 —— 否则条子会永久回落到系统字体，用户还以为"选了个没效果的字体"。
+- `HudState.fontFile` 只存**文件名**：私有目录的绝对路径在应用克隆/多用户下会变。
 
 **调信息条样式**：全在 `HudView.onDraw`。字号、间距、圆角、透明度都在那里。
 

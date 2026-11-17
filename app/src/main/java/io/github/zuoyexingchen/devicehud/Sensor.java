@@ -43,6 +43,17 @@ public final class Sensor {
         return spec.format(v);
     }
 
+    /**
+     * 这个通道是不是"离散状态量"（取最后一个值，不做区间平均）。
+     *
+     * <p>蓝牙电量是典型例子：设备从 1% 掉到 0%，区间均值会给出 0.5，
+     * 再被 {@code %.0f} 四舍五入成 1% —— 界面上就永远差一格。
+     * 电量这种量平均没有物理意义，只能是最后一次上报值。
+     */
+    public boolean isDiscrete() {
+        return spec.kind == SensorSpec.Kind.BT_BATT;
+    }
+
     public float read(DataCollector.Snapshot s) {
         if (s == null) return Float.NaN;
         try {

@@ -20,6 +20,10 @@ public final class Prefs {
     private static final String K_INSET_LEFT = "inset_left";
     private static final String K_INSET_RIGHT = "inset_right";
     private static final String K_THEME = "theme";
+    private static final String K_ACCENT = "theme_accent";
+    private static final String K_THEME_BG = "theme_bg";
+    private static final String K_FONT = "hud_font";
+    private static final String K_BT_HIDDEN = "bt_hidden";
     private static final String K_BAR_H = "bar_h";
     private static final String K_TEXT_SP = "text_sp";
     private static final String K_MARGIN = "margin";
@@ -58,7 +62,13 @@ public final class Prefs {
      * 那边根本没有这个文件，导进去只会得到一个"读取失败"的空条。
      * 与其导出一个必然失效的引用，不如干脆不带 —— 界面上会明确说明。
      */
-    public static final Set<String> NOT_EXPORTED = Set.of(K_BG_URI);
+    /**
+     * 不参与导出/导入的键。
+     *
+     * <p>这两个都指向**本机私有文件**：背景图和自定义字体。导过去只会得到
+     * 一个在目标机上不存在的路径，界面直接变成"读取失败"，不如不导。
+     */
+    public static final Set<String> NOT_EXPORTED = Set.of(K_BG_URI, K_FONT);
 
     /** 上屏档位（刷新率）。与采样率互相独立，不做任何约束 */
     public static final long[] RATES = {200, 500, 1000, 2000, 5000, 10000, 30000, 60000};
@@ -226,6 +236,45 @@ public final class Prefs {
 
     public static void setThemeIndex(Context c, int v) {
         sp(c).edit().putInt(K_THEME, v).apply();
+    }
+
+    public static int customAccent(Context c) {
+        return sp(c).getInt(K_ACCENT, 0xFFE58BA6);
+    }
+
+    public static void setCustomAccent(Context c, int v) {
+        sp(c).edit().putInt(K_ACCENT, v).apply();
+    }
+
+    public static int customBg(Context c) {
+        return sp(c).getInt(K_THEME_BG, 0xF20A0A0C);
+    }
+
+    public static void setCustomBg(Context c, int v) {
+        sp(c).edit().putInt(K_THEME_BG, v).apply();
+    }
+
+    /**
+     * 用户从列表里删掉的蓝牙电量项（逗号分隔）。
+     *
+     * <p>没有这个黑名单，删掉也没意义：{@code SensorTable.ensureBtSensors} 在
+     * 每次蓝牙状态变化时都会按"已连接设备"补齐，删掉的项下次广播就被加回来。
+     */
+    public static String btHidden(Context c) {
+        return sp(c).getString(K_BT_HIDDEN, "");
+    }
+
+    public static void setBtHidden(Context c, String v) {
+        sp(c).edit().putString(K_BT_HIDDEN, v == null ? "" : v).apply();
+    }
+
+    /** 自定义字体文件名（只用名字，不带路径，见 HudState#fontFile 的说明） */
+    public static String fontFile(Context c) {
+        return sp(c).getString(K_FONT, "");
+    }
+
+    public static void setFontFile(Context c, String v) {
+        sp(c).edit().putString(K_FONT, v == null ? "" : v).apply();
     }
 
     public static boolean autoStart(Context c) {
@@ -471,6 +520,9 @@ public final class Prefs {
         HudState.textSizeSp = textSp(c);
         HudState.sideMarginDp = sideMarginDp(c);
         HudState.themeIndex = themeIndex(c);
+        HudState.customAccent = customAccent(c);
+        HudState.customBg = customBg(c);
+        HudState.fontFile = fontFile(c);
         HudState.hidden = !visible(c);
         HudState.showBackground = showBackground(c);
         HudState.gapDp = gapDp(c);
@@ -505,6 +557,9 @@ public final class Prefs {
         setTextSp(c, HudState.textSizeSp);
         setSideMarginDp(c, HudState.sideMarginDp);
         setThemeIndex(c, HudState.themeIndex);
+        setCustomAccent(c, HudState.customAccent);
+        setCustomBg(c, HudState.customBg);
+        setFontFile(c, HudState.fontFile);
         setVisible(c, !HudState.hidden);
         setShowBackground(c, HudState.showBackground);
         setGapDp(c, HudState.gapDp);

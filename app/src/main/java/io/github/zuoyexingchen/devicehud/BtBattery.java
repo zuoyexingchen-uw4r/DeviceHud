@@ -44,6 +44,9 @@ public final class BtBattery {
 
     private static final String TAG = "BtBattery";
 
+    /** 广播值优先多久（ms）。超过之后一次轮询就可以改写它 */
+    private static final long BROADCAST_TTL = 90_000L;
+
     public static final class Dev {
         public final String address;
 
@@ -56,6 +59,16 @@ public final class BtBattery {
         public int level = -1;
         public boolean connected;
         public long updatedAt;
+        /**
+         * 这个电量是不是来自广播。
+         *
+         * <p>广播是设备主动上报的原始百分比；{@code getBatteryLevel()} 读的是
+         * 系统缓存，某些 ROM 上会慢一拍或者按自己的规则取整。两者不一致时以广播为准，
+         * 否则会出现"设备明明 0%，条上还挂着 1%"。
+         */
+        public boolean fromBroadcast;
+        /** 广播值的时间：超过 BROADCAST_TTL 后允许轮询纠正一次 */
+        public long broadcastAt;
     }
 
     private static final Map<String, Dev> sDevices = new LinkedHashMap<>();
@@ -106,6 +119,12 @@ public final class BtBattery {
                         poll(ctx);
                     }
                     return;
+                }
+                if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
+                    // 断开时把电量置为未知。
+                    // 以前这里只是顺手 poll 一次：反射读不到就给 -1、什么也不写，
+                    // 于是设备已经关机了，条上还挂着最后一次读到的 1%（甚至更早的值）。
+                    dropLevel(i);
                 }
                 // ACL 连上/断开：连接状态变了，顺便把电量也刷一遍
                 poll(ctx);
@@ -222,14 +241,43 @@ public final class BtBattery {
                 changed = true;
             }
 
+            // 已断开的设备不去碰电量：系统缓存里可能还留着断开前的值，
+            // 拿它去覆盖会让"设备已经关机"这件事在条上完全看不出来
+            boolean offline = conn != null && !conn;
             int lv = reflectInt(d);
-            if (lv >= 0 && lv != dv.level) {
+            if (!offline && lv >= 0 && lv != dv.level && mayOverrideByPoll(dv)) {
                 dv.level = lv;
                 dv.updatedAt = System.currentTimeMillis();
+                dv.fromBroadcast = false;
                 changed = true;
             }
         }
         if (changed) notifyChange();
+    }
+
+    /** 广播值在有效期内优先；过期后允许系统缓存纠正，避免长期卡在旧值 */
+    private static boolean mayOverrideByPoll(Dev dv) {
+        if (!dv.fromBroadcast) return true;
+        return System.currentTimeMillis() - dv.broadcastAt > BROADCAST_TTL;
+    }
+
+    /** 断开事件：把该设备的电量标为未知 */
+    private static void dropLevel(Intent i) {
+        BluetoothDevice d = extraDevice(i);
+        if (d == null) return;
+        String addr;
+        try {
+            addr = d.getAddress();
+        } catch (Exception e) {
+            return;
+        }
+        synchronized (BtBattery.class) {
+            Dev dv = sDevices.get(addr);
+            if (dv == null) return;
+            dv.connected = false;
+            dv.level = -1;
+            dv.fromBroadcast = false;
+        }
     }
 
     private static BluetoothDevice extraDevice(Intent i) {
@@ -258,6 +306,8 @@ public final class BtBattery {
         dv.level = lv;
         dv.updatedAt = System.currentTimeMillis();
         dv.connected = true;
+        dv.fromBroadcast = true;
+        dv.broadcastAt = dv.updatedAt;
     }
 
     // ------------------------------------------------------------------ 反射取系统缓存

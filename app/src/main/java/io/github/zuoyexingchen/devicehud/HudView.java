@@ -265,12 +265,29 @@ public class HudView extends View {
         return (sp > 0 ? sp : baseSp) * fontScale;
     }
 
-    private Typeface typefaceFor(SensorSpec spec) {        if (!spec.bold && !spec.italic) return Typeface.MONOSPACE;
-        String key = spec.id + (spec.bold ? "b" : "") + (spec.italic ? "i" : "");
+    /**
+     * 基础字体：有自定义字体就用它，否则系统等宽。
+     *
+     * <p>等宽是刻意的默认值 —— 数值每秒都在变，非等宽字体会让整条在跳动，
+     * 想换观感就自己带一个等宽的 ttf。
+     */
+    private Typeface baseTypeface() {
+        Typeface custom = HudFont.typeface(getContext());
+        return custom != null ? custom : Typeface.MONOSPACE;
+    }
+
+    private Typeface typefaceFor(SensorSpec spec) {
+        Typeface base = baseTypeface();
+        if (!spec.bold && !spec.italic) return base;
+
+        // key 里带上字体身份：换字体之后 bold/italic 的派生字体也必须重新建，
+        // 否则换了字体只有正体变了、粗体还是老字体
+        String key = spec.id + (spec.bold ? "b" : "") + (spec.italic ? "i" : "")
+                + "@" + System.identityHashCode(base);
         Typeface tf = tfCache.get(key);
         if (tf == null) {
             int style = (spec.bold ? Typeface.BOLD : 0) | (spec.italic ? Typeface.ITALIC : 0);
-            tf = Typeface.create(Typeface.MONOSPACE, style);
+            tf = Typeface.create(base, style);
             tfCache.put(key, tf);
         }
         return tf;
@@ -554,7 +571,9 @@ public class HudView extends View {
         }
 
         chartPaint.setStyle(Paint.Style.STROKE);
-        chartPaint.setStrokeWidth(Math.max(1f, 1.4f * density));
+        // 线宽跟着单项设置走（默认 1.4dp）。太细在户外看不清，
+        // 太粗会把整个胶囊糊成一块，所以这里只做下限保护
+        chartPaint.setStrokeWidth(Math.max(0.8f, sp.chartStroke * density));
         chartPaint.setColor(lineColor);
         chartPaint.setStrokeCap(Paint.Cap.ROUND);
         chartPaint.setStrokeJoin(Paint.Join.ROUND);
@@ -563,7 +582,8 @@ public class HudView extends View {
         // 末端亮点：一眼看出最新值落在哪
         chartDotPaint.setStyle(Paint.Style.FILL);
         chartDotPaint.setColor(lineColor);
-        canvas.drawCircle(x1, lastY, 1.6f * density, chartDotPaint);
+        canvas.drawCircle(x1, lastY, Math.max(1.2f, sp.chartStroke * 1.15f) * density,
+                chartDotPaint);
     }
 
     private static int withAlpha(int color, int alpha) {

@@ -98,6 +98,8 @@ public final class SensorSpec {
     public float chartMax = 100f;
     /** PLUGIN：表达式源码 */
     public String expr = "";
+    /** CHART：曲线线宽（dp），默认 1.4 —— 太细在户外看不清，太粗会糊成一团 */
+    public float chartStroke = 1.4f;
 
     public static final int CHART_AUTO = 0;
     public static final int CHART_MANUAL = 1;
@@ -127,6 +129,7 @@ public final class SensorSpec {
         s.chartMin = chartMin;
         s.chartMax = chartMax;
         s.expr = expr;
+        s.chartStroke = chartStroke;
         return s;
     }
 
@@ -138,7 +141,8 @@ public final class SensorSpec {
                 // 扩展字段一律追加在末尾：老版本读到第 12 个字段就停，
                 // 新版本按长度判断有没有这些字段，双向兼容
                 + "|" + safe(src) + "|" + chartPoints + "|" + chartMode
-                + "|" + chartMin + "|" + chartMax + "|" + safe(expr);
+                + "|" + chartMin + "|" + chartMax + "|" + safe(expr)
+                + "|" + chartStroke;
     }
 
     private static String safe(String s) {
@@ -172,10 +176,16 @@ public final class SensorSpec {
                 s.chartMax = parseFloat(p[16], 100f);
             }
             if (p.length >= 18) s.expr = p[17];
+            if (p.length >= 19) s.chartStroke = clampFloat(parseFloat(p[18], 1.4f), 0.8f, 6f);
             return s;
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static float clampFloat(float v, float lo, float hi) {
+        if (Float.isNaN(v)) return lo;
+        return Math.max(lo, Math.min(hi, v));
     }
 
     /** 管理列表里显示的标题：翻译名 + 原始标识 */
@@ -186,7 +196,7 @@ public final class SensorSpec {
             return "占位方块  \u00B7  " + Math.max(1, arg) + " 空格";
         }
         if (kind == Kind.CHART) {
-            return "曲线图表  \u00B7  " + (src == null || src.isEmpty() ? "未绑定数据源" : src)
+            return "曲线图表  \u00B7  " + (label == null || label.isEmpty() ? src : label)
                     + "  \u00B7  " + chartPoints + " 点  \u00B7  "
                     + CHART_MODE_NAMES[chartMode == CHART_MANUAL ? 1 : 0];
         }

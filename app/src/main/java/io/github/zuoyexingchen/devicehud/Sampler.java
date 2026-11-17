@@ -18,10 +18,15 @@ public final class Sampler {
     private static final class Acc {
         float sum;
         int count;
+        /** 最后一次采到的值：离散量（比如蓝牙电量）要用它，不能用均值 */
+        float last;
+        /** 本区间内读到无效值（NaN）的采样点数 */
+        int nanCount;
 
         void add(float v) {
             sum += v;
             count++;
+            last = v;
         }
 
         float avg() {
@@ -31,6 +36,7 @@ public final class Sampler {
         void reset() {
             sum = 0f;
             count = 0;
+            nanCount = 0;
         }
     }
 
@@ -49,25 +55,40 @@ public final class Sampler {
         ChartHistory.observe(vals);
         for (Map.Entry<String, Float> e : vals.entrySet()) {
             float v = e.getValue();
-            if (Float.isNaN(v) || Float.isInfinite(v)) continue;
             Acc a = accs.get(e.getKey());
             if (a == null) {
                 a = new Acc();
                 accs.put(e.getKey(), a);
+            }
+            if (Float.isNaN(v) || Float.isInfinite(v)) {
+                // 记一笔"这一帧这个通道没有效值"。光跳过不记的话，take() 里
+                // 这一项就会缺席，上层会拿上次上屏的值来补 —— 于是蓝牙设备
+                // 已经关机、读数是未知，条上还永远挂着最后一次的百分比。
+                a.nanCount++;
+                continue;
             }
             a.add(v);
         }
         return vals;
     }
 
-    /** 取出区间均值并清空。返回 id -> 平均值 */
+    /** 取出区间值并清空。连续量取均值，离散量取最后一次 */
     public Map<String, Float> take(List<Sensor> sensors) {
         Map<String, Float> out = new HashMap<>();
         if (sensors == null) return out;
         for (Sensor se : sensors) {
             Acc a = accs.get(se.id());
-            if (a == null || a.count == 0) continue;
-            out.put(se.id(), a.avg());
+            if (a == null) continue;
+            if (a.count == 0) {
+                // 整个区间一次有效值都没有：显式给出 NaN，
+                // 让上层显示 "--" 而不是沿用上一次的旧值
+                if (a.nanCount > 0) {
+                    out.put(se.id(), Float.NaN);
+                    a.reset();
+                }
+                continue;
+            }
+            out.put(se.id(), se.isDiscrete() ? a.last : a.avg());
             a.reset();
         }
         return out;

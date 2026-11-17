@@ -24,6 +24,23 @@ public final class HudState {
     public static volatile boolean hidden = false;
     public static volatile boolean showBackground = true;
     public static volatile int themeIndex = 0;
+    /**
+     * 自定义主题的强调色。
+     *
+     * <p>只在 {@code themeIndex == HudTheme.CUSTOM_INDEX} 时生效；其余颜色
+     * 由 {@link HudTheme#custom(int, int)} 按底色亮度派生，避免出现浅底浅字。
+     */
+    public static volatile int customAccent = 0xFFE58BA6;
+    /** 自定义主题的底色（含 alpha） */
+    public static volatile int customBg = 0xF20A0A0C;
+
+    /**
+     * 自定义字体的文件（应用私有目录里的 ttf/otf），空 = 用系统等宽字体。
+     *
+     * <p>存文件名而不是绝对路径：私有目录的绝对路径在不同安装之间会变
+     * （多用户 / 应用克隆），只有文件名是稳定的。
+     */
+    public static volatile String fontFile = "";
 
     /** BAT 充放电着色：开启后电源项忽略主题/单项色，按充电状态着色 */
     public static volatile boolean batColor = true;

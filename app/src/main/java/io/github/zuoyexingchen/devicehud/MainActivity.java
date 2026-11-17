@@ -1894,6 +1894,8 @@ public class MainActivity extends Activity {
             if (!HudState.running) {
                 ChartHistory.observe(vals);
                 if (HistoryRecorder.isRecording()) HistoryRecorder.offer(vals);
+                // shell 插件的调度跟着数据循环走；服务在跑时由服务那边 tick
+                ShellPlugins.tick(this);
             }
             float cur = vals.containsKey("batt-cur")
                     ? vals.get("batt-cur") : Math.abs(s.currentMa);
@@ -2469,10 +2471,13 @@ public class MainActivity extends Activity {
         col.addView(row);
 
         TextView note = new TextView(this);
-        note.setText("插件是声明式 JSON：只能写公式，不能执行代码。\n"
-                + "放 files/plugins/*.json，示例文件已生成。\n"
-                + "表达式用安全名引用传感器：batt_cur / agg_cpu，\n"
-                + "支持 if(agg_cpu > 45, 1, 0) 这种阈值判断");
+        note.setText("两条通道：\n"
+                + "\u00B7 表达式 JSON（高频，跟着采样跑）：只能算，不执行代码\n"
+                + "   变量用安全名 batt_cur / agg_cpu，支持 if(x>1,a,b)\n"
+                + "\u00B7 shell 脚本（低频，默认 5s 批量跑一次）：能读任意节点\n"
+                + "   # @metric fan_rpm FAN rpm 0 声明指标，echo name=value 出值\n"
+                + "\n\u26A0 脚本以应用身份运行：能读本应用全部私有数据\n"
+                + "（含 bridge.token）。装脚本 = 信任它的作者。");
         note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
         note.setTextColor(0xFF3E383D);
         note.setTypeface(Typeface.MONOSPACE);
@@ -2483,10 +2488,17 @@ public class MainActivity extends Activity {
     private void refreshPluginStatus() {
         if (pluginStatus == null) return;
         List<PluginHost.Metric> ms = PluginHost.metrics();
-        List<String> warns = PluginHost.warnings();
+        List<String> warns = new ArrayList<>(PluginHost.warnings());
+        warns.addAll(ShellPlugins.warnings());
+        int shScripts = ShellPlugins.fileNames(this).size();
+        int shMetrics = ShellPlugins.metricCount();
         StringBuilder sb = new StringBuilder();
-        sb.append("\u25CF ").append(ms.size()).append(" 个插件指标 · ")
-                .append(PluginHost.fileNames(this).size()).append(" 个文件");
+        sb.append("\u25CF ").append(ms.size()).append(" 个表达式指标 · ")
+                .append(PluginHost.fileNames(this).size()).append(" 个 json");
+        if (shScripts > 0) {
+            sb.append("  \u00B7  ").append(shMetrics).append(" 个 shell 指标 · ")
+                    .append(shScripts).append(" 个 sh");
+        }
         if (!warns.isEmpty()) {
             sb.append(" · ").append(warns.size()).append(" 个问题");
         }
@@ -2519,7 +2531,17 @@ public class MainActivity extends Activity {
             String err = null;
             String name = null;
             try {
-                name = PluginHost.importFrom(this, uri);
+                // 两种插件共用一个入口：内容以 { 开头当声明式 JSON，
+                // 否则当 shell 脚本。比看扩展名可靠 —— 从聊天软件存下来的文件
+                // 经常没有后缀，或者被改成 .txt
+                String text = readUriText(uri);
+                String trimmed = text == null ? "" : text.trim();
+                if (trimmed.startsWith("{")) {
+                    name = PluginHost.importText(this, trimmed);
+                } else {
+                    name = ShellPlugins.importText(this,
+                            uri.getLastPathSegment(), trimmed);
+                }
             } catch (Exception e) {
                 err = e.getMessage();
             }
@@ -2536,11 +2558,29 @@ public class MainActivity extends Activity {
         }, "plugin-import").start();
     }
 
+    /** 把选中的文件整份读成文本（插件导入要判断是 JSON 还是脚本） */
+    private String readUriText(Uri uri) throws Exception {
+        try (java.io.InputStream is = getContentResolver().openInputStream(uri)) {
+            if (is == null) throw new IllegalStateException("读不到文件");
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) {
+                if (bos.size() + n > 512 * 1024) break;   // 插件不该有半兆
+                bos.write(buf, 0, n);
+            }
+            return bos.toString("UTF-8");
+        }
+    }
+
     private void reloadPlugins() {
         // force：用户点"重新加载"就是要把刚改的文件读进来，不能被节流挡回去
         PluginHost.load(this, true);
+        ShellPlugins.load(this, true);
         List<SensorSpec> next = SensorTable.ensurePlugins(this, table);
         if (next != null) table = next;
+        List<SensorSpec> next2 = SensorTable.ensureShellMetrics(this, table);
+        if (next2 != null) table = next2;
         applySensors();
         refreshPluginStatus();
         refreshTransferStatus();

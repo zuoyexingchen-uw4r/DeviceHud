@@ -310,7 +310,11 @@ public final class PluginHost {
             while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
             text = bos.toString(StandardCharsets.UTF_8.name());
         }
+        return importText(c, text);
+    }
 
+    /** 已经拿到文本内容的导入路径（供调用方先判断是 JSON 还是 shell） */
+    public static synchronized String importText(Context c, String text) throws Exception {
         // 先按 JSON 解析一遍：语法错的文件不该落地，否则每次启动都会报同一堆错
         JSONObject root = new JSONObject(text);
         String id = root.optString("id", "").trim();

@@ -111,6 +111,10 @@ public class HudService extends Service {
                 List<Sensor> list = sensors;
                 if (list != null) {
                     Map<String, Float> raw = sampler.offer(s, list);
+                    // shell 插件：低频、异步，到期的脚本合并成一次 fork。
+                    // 传 raw 是让脚本能用 HUD_AGG_CPU 这类环境变量写阈值逻辑。
+                    // 放在采样线程里只是"看一眼有没有到期"，执行在独立线程
+                    ShellPlugins.tick(HudService.this, raw);
                     // 历史记录跟着采样走：采样停了记录就停，
                     // 这样"记录中"不会和"息屏省电"打架
                     if (HistoryRecorder.isRecording()) HistoryRecorder.offer(raw);

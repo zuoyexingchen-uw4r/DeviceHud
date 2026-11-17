@@ -178,10 +178,39 @@ Sampler.offer() → Sensor.readAll() → ┬→ 区间均值（上屏）
 - **设置导入导出**：偏好项包一层 `{"t":"l","v":1234}` 存**原始 Java 类型**。不这么做的话，`getLong` 遇到存成 Integer 的值会抛 `ClassCastException`（JSON 数字解析出来是 Integer/Long/Double，对不上）。
   - 背景图**不导出**：它指向本机私有文件，换机导进去只会得到"读取失败"。
   - 机型不一致时给三选项：全部导入 / 仅导入外观 / 取消。只导外观 = 保留本机传感器表。
-- **插件是声明式 JSON，不是可执行代码**：`files/plugins/*.json` 里只能写 `expr` 公式，由 `Expr`（手写递归下降）求值。没有依赖、没有动态加载、最坏情况只是显示 `--`。表达式里的变量用**安全名**（`batt-cur` → `batt_cur`），因为连字符在表达式里是减号。
+- **插件有两条通道，按"能不能高频算"分工**：
+
+  | | 表达式 JSON | shell 脚本 |
+  |---|---|---|
+  | 目录 | `files/plugins/*.json` | `files/plugins/shell/*.sh` |
+  | 频率 | 跟采样节奏（0.1s~5s） | **≥1s，默认 5s**，批量合并成一次 fork |
+  | 能力 | 只能组合已有指标 | 读任意文件/节点、跑命令 |
+  | 代价 | 纳秒级，无进程 | 每次一次 `fork+exec`，几毫秒到十几毫秒 |
+
+  **为什么不全用 shell**：求值发生在采样路径上。0.1s 档位每秒要算 10 次，
+  换成脚本就是每秒 10 次 fork —— 和"不偷电"直接冲突。所以高频的算术留给表达式，
+  shell 只做表达式做不到的事（读厂商私有节点）。
+
+  **为什么 shell 不跟采样跑**：`ShellPlugins` 把**到期的脚本拼成一个临时 sh 跑一次**，
+  N 个脚本只 fork 一次；执行在独立线程，采样线程只负责"看一眼有没有到期"。
+
+- **表达式插件**：`files/plugins/*.json`，只有 `expr`，由 `Expr`（手写递归下降）求值。没有依赖、没有动态加载，最坏情况只是显示 `--`。变量用**安全名**（`batt-cur` → `batt_cur`），因为连字符在表达式里是减号。
   - 运算符：`+ - * / %`、括号、比较（`< > <= >= == !=`，返回 1/0）；函数：`abs min max clamp sqrt pow round floor ceil avg if`。
   - `if(cond, a, b)` 配比较可以写阈值逻辑，例如 `if(agg_cpu > 45, 1, 0)`。
   - `Expr` 和 `ChartHistory` 都是纯 Java（不依赖 Android），改完可以直接拿 `javac` 在 JVM 上跑一遍，不用等真机。
+
+- **shell 插件**格式（`# @` 开头的是声明，其余随便写）：
+  ```sh
+  # @interval 5000            # 多久跑一次，下限 1000
+  # @timeout 2000             # 单次上限，超时直接 destroy
+  # @metric fan_rpm FAN rpm 0 # name label unit decimals [role]
+  echo "fan_rpm=$(cat /sys/class/fan/fan_speed 2>/dev/null || echo 0)"
+  ```
+  - 应用会把当前读数注入成环境变量 `HUD_<ID大写>`（`agg-cpu` → `HUD_AGG_CPU`），所以脚本能写阈值逻辑，不必自己再读一遍文件。
+  - **指标没启用的脚本完全不执行** —— 每个脚本都是一次 fork，挂着空转和"不偷电"冲突。
+  - 输出上限 64KB、超时 `destroy`、环境变量清空后只留 `PATH`/`HOME`/`TMPDIR`。
+
+- **⚠ shell 插件的安全边界**：脚本以**应用自己的 uid** 运行，能做的事等于应用能做的事 —— 包括读 `files/bridge.token`（拿到即等于电脑侧 shell 通道）、读全部偏好与历史文件、联网。这不是沙箱。界面上对此有明确提示，装脚本 = 信任作者。
 
 ---
 

@@ -93,6 +93,10 @@ public final class Sensor {
                 }
                 case PLACEHOLDER:
                     return Math.max(1, spec.arg);
+                case SHELL:
+                    // 值由后台批处理脚本写好，这里只读缓存；
+                    // 超过 3 个周期没更新会自己变 NaN（界面显示 --）
+                    return ShellPlugins.value(spec.src);
                 // 这两个不直接读硬件：CHART 的值来自 ChartHistory（画图用），
                 // PLUGIN 需要其它传感器的值，必须走 readAll 的两趟计算
                 case CHART:

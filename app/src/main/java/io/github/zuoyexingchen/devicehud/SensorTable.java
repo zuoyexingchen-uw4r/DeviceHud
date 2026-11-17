@@ -137,10 +137,12 @@ public final class SensorTable {
             save(c, t);
             Prefs.setTableVersion(c, TABLE_VERSION);
             PluginHost.load(c);
+            ShellPlugins.load(c);
             return withPlugins(c, t);
         }
         List<SensorSpec> out = decodeAll(Prefs.sensorTable(c));
         PluginHost.load(c);
+        ShellPlugins.load(c);
         if (!out.isEmpty()) return withPlugins(c, out);
 
         out = probe();
@@ -154,8 +156,59 @@ public final class SensorTable {
      * 但 load() 的契约是"一定给一张可用的表"，所以这里必须兜一层。
      */
     private static List<SensorSpec> withPlugins(Context c, List<SensorSpec> table) {
-        List<SensorSpec> next = ensurePlugins(c, table);
-        return next != null ? next : table;
+        List<SensorSpec> a = ensurePlugins(c, table);
+        List<SensorSpec> b = ensureShellMetrics(c, a != null ? a : table);
+        if (b != null) return b;
+        return a != null ? a : table;
+    }
+
+    /**
+     * 把 shell 插件声明的指标同步进表。
+     *
+     * <p>和表达式插件同样的双向同步：脚本删了指标也要消失。
+     * 两者的前缀不同（{@code plug-} / {@code sh-}），各管各的，互不干扰。
+     */
+    public static List<SensorSpec> ensureShellMetrics(Context c, List<SensorSpec> table) {
+        if (table == null) return null;
+
+        java.util.Map<String, SensorSpec> old = new java.util.HashMap<>();
+        List<SensorSpec> base = new ArrayList<>();
+        for (SensorSpec s : table) {
+            if (s.id.startsWith(ShellPlugins.ID_PREFIX)) old.put(s.id, s);
+            else base.add(s);
+        }
+
+        List<SensorSpec> fresh = new ArrayList<>();
+        for (ShellPlugins.Script sc : ShellPlugins.scripts()) {
+            for (ShellPlugins.MetricDecl m : sc.metrics) {
+                fresh.add(ShellPlugins.toSpec(m, sc.file));
+            }
+        }
+
+        boolean same = fresh.size() == old.size();
+        if (same) {
+            for (SensorSpec s : fresh) {
+                SensorSpec prev = old.get(s.id);
+                if (prev == null || !prev.label.equals(s.label) || !prev.unit.equals(s.unit)
+                        || prev.decimals != s.decimals || prev.role != s.role
+                        || !prev.desc.equals(s.desc)) {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if (same) return null;
+
+        int pos = base.size();
+        for (int i = 0; i < base.size(); i++) {
+            if (base.get(i).kind == SensorSpec.Kind.PLACEHOLDER) {
+                pos = i;
+                break;
+            }
+        }
+        base.addAll(pos, fresh);
+        save(c, base);
+        return base;
     }
 
     /**

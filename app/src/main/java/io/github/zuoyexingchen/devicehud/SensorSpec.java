@@ -54,7 +54,12 @@ public final class SensorSpec {
          *
          * <p>表达式里只能用"安全名"（把 id 里的 - 换成 _），例如 {@code batt_cur}。
          */
-        PLUGIN
+        PLUGIN,
+        /**
+         * Shell 插件指标：值是某个 {@code *.sh} 脚本 echo 出来的，
+         * 由 {@link ShellPlugins} 低频批量采集。{@code src} 是脚本里声明的指标名。
+         */
+        SHELL
     }
 
     public enum Role {
@@ -187,6 +192,9 @@ public final class SensorSpec {
         }
         if (kind == Kind.PLUGIN) {
             return "插件指标  \u00B7  " + (desc == null || desc.isEmpty() ? id : desc);
+        }
+        if (kind == Kind.SHELL) {
+            return "Shell 指标  \u00B7  " + (desc == null || desc.isEmpty() ? id : desc);
         }
         if (desc == null || desc.isEmpty()) return label == null || label.isEmpty() ? id : label;
         if (label == null || label.isEmpty()) return desc;

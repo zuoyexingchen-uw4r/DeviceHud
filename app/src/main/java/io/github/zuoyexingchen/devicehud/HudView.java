@@ -45,6 +45,14 @@ public class HudView extends View {
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
 
+    // —— 胶囊图表用的绘制资源（字段持有，避免每帧分配）
+    private final Paint chartPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint capsulePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint chartDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final android.graphics.Path chartPath = new android.graphics.Path();
+    private final RectF chartBox = new RectF();
+    private final float[] chartBuf = new float[ChartHistory.CAPACITY];
+
     private final List<Sensor> sensors = new ArrayList<>();
     private final Map<String, Float> values = new HashMap<>();
     private final Map<String, Typeface> tfCache = new HashMap<>();
@@ -279,7 +287,14 @@ public class HudView extends View {
         if (s.spec.kind == SensorSpec.Kind.PLACEHOLDER) {
             return " ".repeat(Math.max(1, s.spec.arg));
         }
+        // 图表没有数值文本，宽度由 chartWidth 单独给
+        if (s.spec.kind == SensorSpec.Kind.CHART) return "";
         return "000.00" + s.unit();
+    }
+
+    /** 胶囊图表在条上占的宽度（dp）：太窄画不出趋势，太宽又挤掉别的项 */
+    private float chartWidth() {
+        return 64f * density;
     }
 
     /** 单个传感器在条上大约占的宽度（用固定占位串估算，避免数值变化导致排布抖动） */
@@ -287,6 +302,9 @@ public class HudView extends View {
         textPaint.setTextSize(sizeFor(s));
         textPaint.setTypeface(typefaceFor(s.spec));
         float lw = textPaint.measureText(s.label());
+        if (s.spec.kind == SensorSpec.Kind.CHART) {
+            return Math.max(lw + (lw > 0 ? innerGap : 0f) + chartWidth(), 6f * density);
+        }
         float vw = textPaint.measureText(sampleValue(s));
         float w = lw + (lw > 0 ? innerGap : 0f) + vw;
         return Math.max(w, 6f * density);
@@ -409,6 +427,12 @@ public class HudView extends View {
             textPaint.setTextSize(sizeFor(s));
             textPaint.setTypeface(typefaceFor(sp));
 
+            // 图表项自己占满整个槽位（标签 + 胶囊 sparkline），不走文字排版
+            if (sp.kind == SensorSpec.Kind.CHART) {
+                drawChart(canvas, s, contentL + slot * i, slot, h);
+                continue;
+            }
+
             Float boxed = values.get(s.id());
             float v = (boxed == null) ? Float.NaN : boxed;
 
@@ -432,6 +456,118 @@ public class HudView extends View {
 
         textPaint.setTextSize(baseSize);
         textPaint.setTypeface(Typeface.MONOSPACE);
+    }
+
+    /**
+     * 画一个胶囊图表。
+     *
+     * <p>布局：左边是标签（跟着字号走），右边一条圆角胶囊，里面是最近
+     * {@code chartPoints} 个采样点的折线。圆角半径取高度的一半，看起来就是"胶囊"。
+     *
+     * <p>量程有两种：
+     * <ul>
+     *   <li>自动：取窗口内 min/max，上下各留 8% 余量。数据几乎不变时
+     *       （比如温度稳定在 38.0）会退化成一条贴中线的直线，所以设了一个
+     *       最小跨度 —— 否则 0.1 度的噪声会被放大成满屏锯齿，看着像在剧烈波动。</li>
+     *   <li>手动：用用户填的 min/max，超出范围的采样点裁到边界，不会画出胶囊。</li>
+     * </ul>
+     */
+    private void drawChart(Canvas canvas, Sensor s, float slotLeft, float slotW, float h) {
+        SensorSpec sp = s.spec;
+
+        float padX = 2f * density;
+        float labelW = 0f;
+        String label = s.label();
+        float baseline = h / 2f - (textPaint.ascent() + textPaint.descent()) / 2f;
+        if (!label.isEmpty()) {
+            labelW = textPaint.measureText(label) + innerGap;
+            textPaint.setColor(resolveLabelColor(sp, theme));
+            canvas.drawText(label, slotLeft + padX, baseline, textPaint);
+        }
+
+        float boxL = slotLeft + padX + labelW;
+        float boxR = slotLeft + slotW - padX;
+        if (boxR - boxL < 14f * density) return;    // 槽位太窄，画了也是一团糊
+
+        float boxH = Math.min(h * 0.56f, 22f * density);
+        float cy = h / 2f;
+        chartBox.set(boxL, cy - boxH / 2f, boxR, cy + boxH / 2f);
+
+        int lineColor = sp.color != -1 ? sp.color : theme.accent;
+        float radius = boxH / 2f;
+
+        capsulePaint.setStyle(Paint.Style.FILL);
+        capsulePaint.setColor(withAlpha(lineColor, 26));
+        canvas.drawRoundRect(chartBox, radius, radius, capsulePaint);
+
+        int total = ChartHistory.copy(sp.src, chartBuf);
+        int want = Math.max(8, Math.min(sp.chartPoints, ChartHistory.CAPACITY));
+        if (total < 2) return;
+        int start = Math.max(0, total - want);
+        int n = total - start;
+
+        float lo;
+        float hi;
+        if (sp.chartMode == SensorSpec.CHART_MANUAL) {
+            lo = Math.min(sp.chartMin, sp.chartMax);
+            hi = Math.max(sp.chartMin, sp.chartMax);
+            if (hi - lo < 1e-6f) hi = lo + 1f;
+        } else {
+            lo = Float.MAX_VALUE;
+            hi = -Float.MAX_VALUE;
+            for (int i = start; i < total; i++) {
+                float v = chartBuf[i];
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+            }
+            float span = hi - lo;
+            float minSpan = Math.max(1e-3f, Math.abs(hi) * 0.02f);
+            if (span < minSpan) {
+                float mid = (lo + hi) / 2f;
+                lo = mid - minSpan / 2f;
+                hi = mid + minSpan / 2f;
+            } else {
+                float padY = span * 0.08f;
+                lo -= padY;
+                hi += padY;
+            }
+        }
+
+        float inset = 1.5f * density;
+        float x0 = chartBox.left + inset;
+        float x1 = chartBox.right - inset;
+        float y0 = chartBox.top + inset;
+        float y1 = chartBox.bottom - inset;
+
+        chartPath.reset();
+        float lastY = (y0 + y1) / 2f;
+        for (int i = 0; i < n; i++) {
+            float v = chartBuf[start + i];
+            float px = x0 + (x1 - x0) * (i / (float) (n - 1));
+            float t = (v - lo) / (hi - lo);
+            if (t < 0f) t = 0f;
+            else if (t > 1f) t = 1f;
+            float py = y1 - (y1 - y0) * t;
+            if (i == 0) chartPath.moveTo(px, py);
+            else chartPath.lineTo(px, py);
+            lastY = py;
+        }
+
+        chartPaint.setStyle(Paint.Style.STROKE);
+        chartPaint.setStrokeWidth(Math.max(1f, 1.4f * density));
+        chartPaint.setColor(lineColor);
+        chartPaint.setStrokeCap(Paint.Cap.ROUND);
+        chartPaint.setStrokeJoin(Paint.Join.ROUND);
+        canvas.drawPath(chartPath, chartPaint);
+
+        // 末端亮点：一眼看出最新值落在哪
+        chartDotPaint.setStyle(Paint.Style.FILL);
+        chartDotPaint.setColor(lineColor);
+        canvas.drawCircle(x1, lastY, 1.6f * density, chartDotPaint);
+    }
+
+    private static int withAlpha(int color, int alpha) {
+        return (color & 0x00FFFFFF) | ((alpha & 0xFF) << 24);
     }
 
     /**

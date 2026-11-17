@@ -49,6 +49,16 @@ public final class Prefs {
     private static final String K_TABLE_VER = "sensor_table_ver";
     private static final String K_NOTIF = "notif_takeover";
     private static final String K_HIDE_RECENTS = "hide_recents";
+    private static final String K_HISTORY_MS = "history_interval_ms";
+
+    /**
+     * 不参与导出的键。
+     *
+     * <p>背景图指向的是本机私有副本 {@code files/bar_bg.img}，导出给别人之后
+     * 那边根本没有这个文件，导进去只会得到一个"读取失败"的空条。
+     * 与其导出一个必然失效的引用，不如干脆不带 —— 界面上会明确说明。
+     */
+    public static final Set<String> NOT_EXPORTED = Set.of(K_BG_URI);
 
     /** 上屏档位（刷新率）。与采样率互相独立，不做任何约束 */
     public static final long[] RATES = {200, 500, 1000, 2000, 5000, 10000, 30000, 60000};
@@ -388,6 +398,64 @@ public final class Prefs {
 
     public static void setHideRecents(Context c, boolean v) {
         sp(c).edit().putBoolean(K_HIDE_RECENTS, v).apply();
+    }
+
+    /** 历史记录的落盘间隔（ms） */
+    public static int historyIntervalMs(Context c) {
+        return sp(c).getInt(K_HISTORY_MS, 1000);
+    }
+
+    public static void setHistoryIntervalMs(Context c, int v) {
+        sp(c).edit().putInt(K_HISTORY_MS, v).apply();
+    }
+
+    // ------------------------------------------------------------------ 导入导出
+
+    /**
+     * 全部设置的快照。
+     *
+     * <p>直接遍历 SharedPreferences 而不是逐个字段列举：Preference 的键只会
+     * 增加，靠人工维护的清单一定会漏。代价是新增的键自动被导出 —— 这正是我们要的。
+     */
+    public static java.util.Map<String, Object> snapshot(Context c) {
+        java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+        for (java.util.Map.Entry<String, ?> e : sp(c).getAll().entrySet()) {
+            if (NOT_EXPORTED.contains(e.getKey())) continue;
+            // sensor_table / sensor_table_ver 由 SettingsTransfer 单独处理（它们要配上机型）
+            if (K_TABLE.equals(e.getKey()) || K_TABLE_VER.equals(e.getKey())) continue;
+            out.put(e.getKey(), e.getValue());
+        }
+        return out;
+    }
+
+    /**
+     * 把快照写回。只接受已知类型，其它一律忽略 ——
+     * 导入的是外部文件，不能假设里面的值都合法。
+     *
+     * @return 实际写入的键数
+     */
+    public static int applySnapshot(Context c, java.util.Map<String, Object> in) {
+        if (in == null || in.isEmpty()) return 0;
+        SharedPreferences.Editor ed = sp(c).edit();
+        int n = 0;
+        for (java.util.Map.Entry<String, Object> e : in.entrySet()) {
+            String k = e.getKey();
+            Object v = e.getValue();
+            if (k == null || v == null) continue;
+            if (NOT_EXPORTED.contains(k)) continue;
+            // 键名不收外部文件里乱写的东西，避免污染 prefs
+            if (!k.matches("[a-z0-9_]{1,48}")) continue;
+
+            if (v instanceof String) ed.putString(k, (String) v);
+            else if (v instanceof Integer) ed.putInt(k, (Integer) v);
+            else if (v instanceof Long) ed.putLong(k, (Long) v);
+            else if (v instanceof Boolean) ed.putBoolean(k, (Boolean) v);
+            else if (v instanceof Float) ed.putFloat(k, (Float) v);
+            else continue;
+            n++;
+        }
+        ed.apply();
+        return n;
     }
 
     // ------------------------------------------------------------------ 与运行时状态互转

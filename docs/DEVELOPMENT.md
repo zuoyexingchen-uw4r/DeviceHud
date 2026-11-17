@@ -73,6 +73,11 @@ app/src/main/java/io/github/zuoyexingchen/devicehud/
 | `HudTheme.java` | 5 套配色定义 | 低（加主题时才动） |
 | `HudState.java` / `Sampler.java` / `Screen.java` | 状态、采样调度、屏幕参数 | 中 |
 | `BgImage.java` / `CropView.java` / `ImageCropDialog.java` | 背景图选择与裁切 | 低 |
+| `ChartHistory.java` | 每通道的采样环形缓冲，曲线图的数据源 | 低 |
+| `HistoryRecorder.java` | 历史 CSV 记录与导出 | 中 |
+| `SettingsTransfer.java` / `DeviceInfo.java` | 设置导入导出、机型判定 | 中 |
+| `FullScreenPreview.java` | 全屏状态栏预览（黑/白/花三种背景） | 低 |
+| `PluginHost.java` / `Expr.java` | 声明式 JSON 插件 + 表达式求值 | 中 |
 | `JoystickView.java` | 摇杆控件 | 低 |
 | `BtBattery.java` | 蓝牙设备电量 | 低 |
 | `BootReceiver.java` | 开机自启 | 低 |
@@ -150,6 +155,33 @@ for (Map.Entry<String, Float> e : lastValues.entrySet()) {
 ### 4.5 UI 全是自绘
 
 没有任何 XML 布局（除了通知栏那张 `notif_hud.xml`）。`HudView` 在 `onDraw` 里量文字宽度、排版、画背景圆角矩形。改样式基本都在这里。
+
+主界面按草图分成 `preview` + 三列（`EDIT COLUMN` / `PLACE EDIT` + `BACKGROUND & COLOUR` / `ADVANCED SETTINGS`）+ 底部悬浮按钮条。屏宽 ≥ 700dp 才并排，否则竖向堆叠。
+
+> **竖向堆叠时列宽必须用 `MATCH_PARENT`，不能抄横向那套 `width=0 + weight`。** 竖向布局里 weight 分的是高度，宽度会直接变 0，整块内容凭空消失而且不报错。
+
+### 4.6 曲线 / 历史 / 导入导出 / 插件
+
+这四块共用一条数据链，改任何一块前先看清它们的边界：
+
+```
+Sampler.offer() → Sensor.readAll() → ┬→ 区间均值（上屏）
+                                     ├→ ChartHistory（曲线）
+                                     └→ HistoryRecorder（CSV）
+```
+
+- **`ChartHistory`**：每通道一个定长环形缓冲（`CAPACITY = 300`）。和 `Sampler` 不能合并 —— 后者是区间累加器，`take()` 取完就清零，拿不到"过去 N 个点"。
+- **图表是一个传感器**：`SensorSpec.Kind.CHART`，用 `src` 指向数据源，`chartMode` 决定自动/手动量程。渲染在 `HudView.drawChart()`，占满整个槽位：左边标签、右边胶囊 sparkline。
+  - 自动量程有**最小跨度**（`max(1e-3, |hi| * 2%)`）。不设的话，温度稳在 38.0 时 0.1 度的噪声会被放大成满屏锯齿。
+  - 手动量程超界裁剪到边界，不会画出胶囊。
+- **历史记录**：只在服务采样循环里喂（`Sampler.offer` 的返回值），息屏采样停了记录也停 —— 跟着省电路径走，不额外唤醒。CSV 以 `#` 注释开头写机型/SoC/间隔，Excel 和 pandas 都能直接读。
+- **设置导入导出**：偏好项包一层 `{"t":"l","v":1234}` 存**原始 Java 类型**。不这么做的话，`getLong` 遇到存成 Integer 的值会抛 `ClassCastException`（JSON 数字解析出来是 Integer/Long/Double，对不上）。
+  - 背景图**不导出**：它指向本机私有文件，换机导进去只会得到"读取失败"。
+  - 机型不一致时给三选项：全部导入 / 仅导入外观 / 取消。只导外观 = 保留本机传感器表。
+- **插件是声明式 JSON，不是可执行代码**：`files/plugins/*.json` 里只能写 `expr` 公式，由 `Expr`（手写递归下降）求值。没有依赖、没有动态加载、最坏情况只是显示 `--`。表达式里的变量用**安全名**（`batt-cur` → `batt_cur`），因为连字符在表达式里是减号。
+  - 运算符：`+ - * / %`、括号、比较（`< > <= >= == !=`，返回 1/0）；函数：`abs min max clamp sqrt pow round floor ceil avg if`。
+  - `if(cond, a, b)` 配比较可以写阈值逻辑，例如 `if(agg_cpu > 45, 1, 0)`。
+  - `Expr` 和 `ChartHistory` 都是纯 Java（不依赖 Android），改完可以直接拿 `javac` 在 JVM 上跑一遍，不用等真机。
 
 ---
 
@@ -263,6 +295,21 @@ cd bridge
 **加一套配色**：`HudTheme` 里加一个枚举项，定义前景/背景/强调色即可，排版不用管。
 
 **调信息条样式**：全在 `HudView.onDraw`。字号、间距、圆角、透明度都在那里。
+
+**给某个指标加一条曲线**：左列对应行点「⌇」→ `SensorTable.newChart(table, srcId)` 生成一个 `CHART` 项并启用。量程在「管理传感器 → Aa」里调（自动/手动 + 上下限 + 保留点数）。
+
+**加一个插件指标**：往 `files/plugins/` 放一个 json，不用改代码：
+
+```json
+{"id":"my","name":"我的插件","metrics":[
+  {"id":"est-watt","label":"EST","unit":"W","decimals":2,"role":"POWER",
+   "expr":"batt_volt * abs(batt_cur) / 1000","desc":"估算功率"}
+]}
+```
+
+改完点「重新加载」即可，`SensorTable.ensurePlugins` 会同步进表。
+
+**换导出格式**：`HistoryRecorder` 写的是 CSV；要换 JSON 就改 `start()` 里的表头与 `offer()` 的行拼装，别动导出那段（它只做字节拷贝）。
 
 **改设置项**：`MainActivity` 用的是一套手写的卡片布局构建方式，跟着现有代码的模式加就行。
 

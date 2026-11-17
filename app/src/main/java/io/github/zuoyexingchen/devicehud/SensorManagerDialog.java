@@ -445,6 +445,7 @@ public final class SensorManagerDialog {
         box.setPadding(i(dp, 18), i(dp, 8), i(dp, 18), 0);
 
         boolean ph = sp.kind == SensorSpec.Kind.PLACEHOLDER;
+        boolean chart = sp.kind == SensorSpec.Kind.CHART;
 
         EditText nameIn = input(act, "名称", sp.label);
         EditText unitIn = input(act, "单位", sp.unit);
@@ -454,10 +455,60 @@ public final class SensorManagerDialog {
 
         box.addView(label(act, "名称"));
         box.addView(nameIn);
-        box.addView(label(act, "单位"));
-        box.addView(unitIn);
+        if (!chart) {
+            box.addView(label(act, "单位"));
+            box.addView(unitIn);
+        }
         box.addView(label(act, ph ? "宽度" : "字号"));
         box.addView(sizeIn);
+
+        // 图表专属：数据源是只读的（换源等于换一张图，直接删了重加更清楚），
+        // 真正要调的是"量程怎么定"和"保留多少个点"
+        final EditText minIn;
+        final EditText maxIn;
+        final EditText pointsIn;
+        final CheckBox manual;
+        if (chart) {
+            box.addView(label(act, "数据源"));
+            TextView srcView = new TextView(act);
+            srcView.setText(sp.src == null || sp.src.isEmpty() ? "(未绑定)" : sp.src);
+            srcView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            srcView.setTypeface(Typeface.MONOSPACE);
+            srcView.setTextColor(TEXT);
+            srcView.setPadding(0, i(dp, 4), 0, i(dp, 4));
+            box.addView(srcView);
+
+            manual = new CheckBox(act);
+            manual.setText("手动量程（关掉 = 自动跟随数据）");
+            manual.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            manual.setTextColor(TEXT);
+            manual.setChecked(sp.chartMode == SensorSpec.CHART_MANUAL);
+            box.addView(manual);
+
+            minIn = input(act, "下限", String.valueOf(sp.chartMin));
+            maxIn = input(act, "上限", String.valueOf(sp.chartMax));
+            minIn.setInputType(InputType.TYPE_CLASS_NUMBER
+                    | InputType.TYPE_NUMBER_FLAG_DECIMAL
+                    | InputType.TYPE_NUMBER_FLAG_SIGNED);
+            maxIn.setInputType(InputType.TYPE_CLASS_NUMBER
+                    | InputType.TYPE_NUMBER_FLAG_DECIMAL
+                    | InputType.TYPE_NUMBER_FLAG_SIGNED);
+            box.addView(label(act, "量程下限"));
+            box.addView(minIn);
+            box.addView(label(act, "量程上限"));
+            box.addView(maxIn);
+
+            pointsIn = input(act, "点数（8~" + ChartHistory.CAPACITY + "）",
+                    String.valueOf(sp.chartPoints));
+            pointsIn.setInputType(InputType.TYPE_CLASS_NUMBER);
+            box.addView(label(act, "保留点数"));
+            box.addView(pointsIn);
+        } else {
+            minIn = null;
+            maxIn = null;
+            pointsIn = null;
+            manual = null;
+        }
 
         // 颜色
         box.addView(label(act, "颜色"));
@@ -537,6 +588,32 @@ public final class SensorManagerDialog {
                     sp.color = picked[0];
                     sp.bold = bold.isChecked();
                     sp.italic = italic.isChecked();
+
+                    if (chart) {
+                        sp.chartMode = manual.isChecked()
+                                ? SensorSpec.CHART_MANUAL : SensorSpec.CHART_AUTO;
+                        try {
+                            sp.chartMin = Float.parseFloat(minIn.getText().toString().trim());
+                        } catch (Exception ignored) {
+                        }
+                        try {
+                            sp.chartMax = Float.parseFloat(maxIn.getText().toString().trim());
+                        } catch (Exception ignored) {
+                        }
+                        // 上下限写反了直接交换，而不是报错让用户重填 ——
+                        // 这两个框的先后顺序对手指不友好，容错比纠错便宜
+                        if (sp.chartMax < sp.chartMin) {
+                            float t = sp.chartMin;
+                            sp.chartMin = sp.chartMax;
+                            sp.chartMax = t;
+                        }
+                        if (sp.chartMax - sp.chartMin < 1e-6f) sp.chartMax = sp.chartMin + 1f;
+                        try {
+                            int n = Integer.parseInt(pointsIn.getText().toString().trim());
+                            sp.chartPoints = Math.max(8, Math.min(ChartHistory.CAPACITY, n));
+                        } catch (Exception ignored) {
+                        }
+                    }
 
                     host.onTableChanged(host.table());
                     refresh.run();

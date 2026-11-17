@@ -102,6 +102,16 @@ public class MainActivity extends Activity {
     private final Map<String, TextView> cardValues = new HashMap<>();
     private final List<TextView> rateChips = new ArrayList<>();
     private final List<TextView> sampleChips = new ArrayList<>();
+    /** 是否走三列布局（横屏 / 平板） */
+    private boolean wideLayout = false;
+    /** 左列"传感器 → 实时值"行 */
+    private final Map<String, TextView> rowValues = new HashMap<>();
+    private LinearLayout rowsBox;
+    /** 待导出的历史文件（用户选完目标位置后才用得上） */
+    private java.io.File pendingHistoryExport;
+    private TextView historyStatus;
+    private TextView pluginStatus;
+    private TextView transferStatus;
 
     /** 固化下来的整张传感器表 */
     private List<SensorSpec> table = new ArrayList<>();
@@ -202,8 +212,11 @@ public class MainActivity extends Activity {
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(18), dp(10), dp(18), dp(30));
-        int contentW = Math.min(screenW - dp(24), dp(760));
+        // 底部留出悬浮按钮的高度，否则滚到底会被挡住
+        col.setPadding(dp(18), dp(10), dp(18), dp(96));
+        // 三列并排需要足够横向空间：窄屏（手机竖屏）硬塞三列会把每列压到 120dp 以下
+        wideLayout = screenW / density >= 700f;
+        int contentW = Math.min(screenW - dp(24), wideLayout ? dp(1320) : dp(760));
         wrap.addView(col, new LinearLayout.LayoutParams(
                 contentW, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -217,13 +230,32 @@ public class MainActivity extends Activity {
 
         buildHeader(col);
         buildPreview(col);
-        buildSensors(col);
-        buildRate(col);
-        buildLayoutTuning(col);
-        buildAppearance(col);
-        buildTheme(col);
-        buildOverlayControl(col);
-        buildSystem(col);
+
+        LinearLayout columns = new LinearLayout(this);
+        columns.setOrientation(wideLayout ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        col.addView(columns, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout left = columnBox();
+        buildEditColumn(left);
+        LinearLayout mid = columnBox();
+        buildPlaceColumn(mid);
+        LinearLayout right = columnBox();
+        buildAdvancedColumn(right);
+
+        if (wideLayout) {
+            columns.addView(left, columnLp(1.02f));
+            columns.addView(mid, columnLp(1.16f));
+            columns.addView(right, columnLp(1f));
+        } else {
+            columns.addView(left, columnLp(1f));
+            columns.addView(vGap());
+            columns.addView(mid, columnLp(1f));
+            columns.addView(vGap());
+            columns.addView(right, columnLp(1f));
+        }
+
+        buildBottomBar(root);
 
         setContentView(root);
         applyRecentsHidden();
@@ -294,7 +326,7 @@ public class MainActivity extends Activity {
         col.addView(row);
 
         TextView sub = new TextView(this);
-        sub.setText("sensor mux \u00B7 independent sample / update \u00B7 interval averaging");
+        sub.setText("sensor mux \u00B7 chart capsule \u00B7 history csv \u00B7 json plugins");
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
         sub.setTypeface(Typeface.MONOSPACE);
         sub.setTextColor(0xFF3E383D);
@@ -316,6 +348,8 @@ public class MainActivity extends Activity {
         preview.setTextSizeSp(HudState.textSizeSp);
         frame.addView(preview, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(HudState.barHeightDp)));
+        // 点预览直接进全屏：设置页那条永远看不出"和状态栏叠在一起"的效果
+        frame.setOnClickListener(v -> FullScreenPreview.show(this));
 
         col.addView(frame, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -386,12 +420,19 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ 传感器选择
 
     private void buildSensors(LinearLayout col) {
-        sectionLabel(col, "SENSORS");
+        sectionLabel(col, "EDIT COLUMN");
 
         col.addView(smallButton("管理传感器 / 单位 / 样式\u2026", v -> openSensorManager()),
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                matchWrap());
+
+        // 一行一个"名字 + 实时值 + 加曲线"：这是左列的主内容，
+        // 改样式仍然走上面的管理对话框，这里只做"看得见 + 一键加曲线"
+        rowsBox = new LinearLayout(this);
+        rowsBox.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams rlp = matchWrap();
+        rlp.topMargin = dp(8);
+        col.addView(rowsBox, rlp);
+        rebuildRows();
 
         sensorSummary = new TextView(this);
         sensorSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
@@ -442,6 +483,7 @@ public class MainActivity extends Activity {
         activeSensors = Sensor.resolve(table, HudState.sensorIds);
         if (preview != null) preview.setSensors(activeSensors);
         rebuildCards();
+        rebuildRows();
         updateSensorSummary();
         HudState.bump();
     }
@@ -649,7 +691,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ 外观
 
     private void buildAppearance(LinearLayout col) {
-        sectionLabel(col, "APPEARANCE");
+        sectionLabel(col, "BACKGROUND & COLOUR");
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -858,6 +900,10 @@ public class MainActivity extends Activity {
     }
 
     private static final int REQ_BG_IMAGE = 0x4B1;
+    private static final int REQ_EXPORT_SETTINGS = 0x4C1;
+    private static final int REQ_IMPORT_SETTINGS = 0x4C2;
+    private static final int REQ_EXPORT_HISTORY = 0x4C3;
+    private static final int REQ_IMPORT_PLUGIN = 0x4C4;
 
     /** 源图解码长边上限：再大就只是白占内存，条上根本用不到 */
     private static final int SOURCE_MAX_DIM = 3200;
@@ -884,8 +930,31 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQ_BG_IMAGE || resultCode != RESULT_OK || data == null) return;
-        Uri uri = data.getData();
+        if (resultCode != RESULT_OK || data == null) return;
+        Uri picked = data.getData();
+
+        // 导出 / 导入 / 插件都走同一个 SAF 回调，先在这里分流再走背景图那条老路
+        if (requestCode == REQ_EXPORT_SETTINGS) {
+            if (picked != null) doExportSettings(picked);
+            return;
+        }
+        if (requestCode == REQ_IMPORT_SETTINGS) {
+            if (picked != null) doImportSettings(picked);
+            return;
+        }
+        if (requestCode == REQ_IMPORT_PLUGIN) {
+            if (picked != null) doImportPlugin(picked);
+            return;
+        }
+        if (requestCode == REQ_EXPORT_HISTORY) {
+            if (picked != null && pendingHistoryExport != null) {
+                exportHistoryTo(picked, pendingHistoryExport);
+            }
+            return;
+        }
+
+        if (requestCode != REQ_BG_IMAGE) return;
+        Uri uri = picked;
         if (uri == null) return;
 
         // 选完就解码成位图，之后的裁剪与保存都在私有目录里完成，
@@ -1157,7 +1226,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ 悬浮窗控制
 
     private void buildOverlayControl(LinearLayout col) {
-        sectionLabel(col, "OVERLAY CONTROL");
+        sectionLabel(col, "PLACE EDIT");
 
         FrameLayout card = new FrameLayout(this);
         card.setBackground(roundRect(BG_CARD, 16f, STROKE_CARD));
@@ -1260,17 +1329,6 @@ public class MainActivity extends Activity {
         col.addView(card, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        col.addView(spacer(12));
-        toggleBtn = bigButton("开启悬浮窗", v -> {
-            if (HudState.running) {
-                stopService(new Intent(this, HudService.class));
-                handler.postDelayed(this::syncToggle, 150);
-            } else {
-                startHud();
-            }
-        });
-        col.addView(toggleBtn, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
         col.addView(spacer(16));
     }
 
@@ -1343,7 +1401,8 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ 系统
 
-    private void buildSystem(LinearLayout col) {
+    /** 数据着色规则：BAT 颜色 / 慢充告警 / 电流符号 */
+    private void buildBatColour(LinearLayout col) {
         sectionLabel(col, "BAT COLOUR");
 
         CheckBox batColor = batCheck("启用 BAT 颜色变化（忽略主题色）", HudState.batColor, (btn, c) -> {
@@ -1399,50 +1458,24 @@ public class MainActivity extends Activity {
         rule.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
         rule.setTextColor(0xFF3E383D);
         rule.setTypeface(Typeface.MONOSPACE);
-        rule.setPadding(dp(2), dp(6), 0, dp(18));
+        rule.setPadding(dp(2), dp(6), 0, dp(16));
         col.addView(rule);
+    }
 
-        sectionLabel(col, "NOTIFICATION");
-
-        CheckBox notif = batCheck("接管安卓「悬浮窗已开启」通知", HudState.notifTakeover, (btn, c) -> {
-            HudState.notifTakeover = c;
-            Prefs.setNotifTakeover(this, c);
-            refreshNotification();
-        });
-        col.addView(notif);
-
-        TextView notifHint = new TextView(this);
-        notifHint.setText("第一行 = 前 3 项数据（与悬浮条同色）\n第二行 = 关闭悬浮窗 / 打开应用 / 警报消除");
-        notifHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
-        notifHint.setTextColor(0xFF3E383D);
-        notifHint.setTypeface(Typeface.MONOSPACE);
-        notifHint.setPadding(dp(2), dp(4), 0, dp(6));
-        col.addView(notifHint);
-
-        // 系统那条「X 正在其他应用上层显示」由 WindowManager 在悬浮窗表面可见时投放，
-        // 只认"窗口可见"这一个条件，应用无权改写或撤销，这里只把人送到它的通道开关前
-        col.addView(smallButton("系统悬浮窗提醒开关（系统发的，非本应用）\u2026",
-                        v -> openSystemOverlayNotifSettings()),
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        col.addView(spacer(18));
-
-        sectionLabel(col, "SYSTEM");
+    /** 自启与后台活动 */
+    private void buildSelfStart(LinearLayout col) {
+        sectionLabel(col, "SELF-START & BACKGROUND");
 
         autoBtn = smallButton("开机自启：--", v -> {
             boolean next = !Prefs.autoStart(this);
             Prefs.setAutoStart(this, next);
             syncSystemState();
         });
-        col.addView(autoBtn, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
+        col.addView(autoBtn, matchWrap());
         col.addView(spacer(8));
 
         batteryBtn = smallButton("电池优化：--", v -> requestIgnoreBattery());
-        col.addView(batteryBtn, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
+        col.addView(batteryBtn, matchWrap());
         col.addView(spacer(8));
 
         CheckBox recents = batCheck("在最近任务中隐藏本应用", Prefs.hideRecents(this), (btn, c) -> {
@@ -1451,11 +1484,22 @@ public class MainActivity extends Activity {
         });
         col.addView(recents);
 
-        col.addView(spacer(8));
+        TextView note = new TextView(this);
+        note.setText("息屏后采样与绘制全部停止，亮屏自动恢复。\n"
+                + "电池优化未忽略时，部分 ROM 会在后台清掉悬浮条。");
+        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        note.setTextColor(0xFF3E383D);
+        note.setTypeface(Typeface.MONOSPACE);
+        note.setPadding(dp(2), dp(6), 0, dp(16));
+        col.addView(note);
+    }
 
-        shizukuBtn = smallButton("Shizuku：--", v -> onShizukuClick());
-        col.addView(shizukuBtn, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    /** ADB / SHELL 状态：电脑旁路桥与 Shizuku 两条高权限通道 */
+    private void buildShellState(LinearLayout col) {
+        sectionLabel(col, "ADB / SHELL STATE");
+
+        shizukuBtn = smallButton("Shizuku / 旁路桥：--", v -> onShizukuClick());
+        col.addView(shizukuBtn, matchWrap());
 
         TextView shizukuNote = new TextView(this);
         shizukuNote.setText("高权限 Shell 有两条路径：\n"
@@ -1465,12 +1509,12 @@ public class MainActivity extends Activity {
         shizukuNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
         shizukuNote.setTextColor(0xFF3E383D);
         shizukuNote.setTypeface(Typeface.MONOSPACE);
-        shizukuNote.setPadding(dp(2), dp(6), 0, 0);
+        shizukuNote.setPadding(dp(2), dp(6), 0, dp(10));
         col.addView(shizukuNote);
 
         btBtn = smallButton("蓝牙电量：--", v -> onBtClick());
-        col.addView(btBtn, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        col.addView(btBtn, matchWrap());
+        col.addView(spacer(8));
 
         LinearLayout btRow = new LinearLayout(this);
         btRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -1488,21 +1532,39 @@ public class MainActivity extends Activity {
 
         TextView btNote = new TextView(this);
         btNote.setText("读的是系统缓存的蓝牙电量（0x180F 电量服务）。\n"
-                + "有电量变化时系统会广播，平时按上面的间隔主动轮询一次。\n"
-                + "权限「附近的设备」只用来读已配对设备的名称与电量。");
+                + "有变化时系统会广播，平时按上面的间隔主动轮询一次。");
         btNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
         btNote.setTextColor(0xFF3E383D);
         btNote.setTypeface(Typeface.MONOSPACE);
-        btNote.setPadding(dp(2), dp(6), 0, 0);
+        btNote.setPadding(dp(2), dp(6), 0, dp(16));
         col.addView(btNote);
+    }
 
-        TextView note = new TextView(this);
-        note.setText("息屏后采样与绘制全部停止，亮屏自动恢复");
-        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
-        note.setTextColor(0xFF3E383D);
-        note.setTypeface(Typeface.MONOSPACE);
-        note.setPadding(dp(2), dp(10), 0, 0);
-        col.addView(note);
+    /** 通知：接管前台服务那条通知 */
+    private void buildNotificationState(LinearLayout col) {
+        sectionLabel(col, "NOTIFICATION STATE");
+
+        CheckBox notif = batCheck("接管安卓「悬浮窗已开启」通知", HudState.notifTakeover, (btn, c) -> {
+            HudState.notifTakeover = c;
+            Prefs.setNotifTakeover(this, c);
+            refreshNotification();
+        });
+        col.addView(notif);
+
+        TextView notifHint = new TextView(this);
+        notifHint.setText("第一行 = 前 3 项数据（与悬浮条同色）\n第二行 = 关闭悬浮窗 / 打开应用 / 警报消除");
+        notifHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        notifHint.setTextColor(0xFF3E383D);
+        notifHint.setTypeface(Typeface.MONOSPACE);
+        notifHint.setPadding(dp(2), dp(4), 0, dp(8));
+        col.addView(notifHint);
+
+        // 系统那条「X 正在其他应用上层显示」由 WindowManager 在悬浮窗表面可见时投放，
+        // 只认"窗口可见"这一个条件，应用无权改写或撤销，这里只把人送到它的通道开关前
+        col.addView(smallButton("系统悬浮窗提醒开关（系统发的）\u2026",
+                        v -> openSystemOverlayNotifSettings()),
+                matchWrap());
+        col.addView(spacer(16));
     }
 
     private CheckBox batCheck(String text, boolean checked,
@@ -1825,13 +1887,29 @@ public class MainActivity extends Activity {
                 }
             }
 
-            Map<String, Float> vals = new HashMap<>();
-            for (Sensor se : activeSensors) {
-                vals.put(se.id(), se.read(s));
+            // readAll 而不是逐个 read：插件指标要等基础通道都算完才能求值
+            Map<String, Float> vals = Sensor.readAll(activeSensors, s);
+            // 服务没跑时由这里喂图表历史与记录，跑了就交给服务，
+            // 两边都喂等于按两倍频率采样，曲线会"跑得快"
+            if (!HudState.running) {
+                ChartHistory.observe(vals);
+                if (HistoryRecorder.isRecording()) HistoryRecorder.offer(vals);
             }
             float cur = vals.containsKey("batt-cur")
                     ? vals.get("batt-cur") : Math.abs(s.currentMa);
             preview.setValues(vals, s.charging, cur);
+
+            // 左列的实时值：只 setText，不重建 View
+            for (Sensor se : activeSensors) {
+                if (se.spec.kind == SensorSpec.Kind.CHART) continue;  // 曲线行固定显示"曲线"
+                TextView tv = rowValues.get(se.id());
+                if (tv == null) continue;
+                float v = vals.containsKey(se.id()) ? vals.get(se.id()) : Float.NaN;
+                tv.setText(se.format(v) + se.unit());
+            }
+            if (historyStatus != null && HistoryRecorder.isRecording()) {
+                refreshHistoryStatus();
+            }
 
             HudTheme th = HudTheme.byIndex(HudState.themeIndex);
             for (Sensor se : activeSensors) {
@@ -1870,6 +1948,602 @@ public class MainActivity extends Activity {
         int barH = dp(HudState.barHeightDp);
         HudState.x = clamp(HudState.x, -barW / 2, screenW - barW / 2);
         HudState.y = clamp(HudState.y, -barH, screenH - barH / 2);
+    }
+
+    // ------------------------------------------------------------------ 三列布局
+
+    /** 一列的容器：本身不带背景，靠里面各区块自己的卡片撑视觉 */
+    private LinearLayout columnBox() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        return box;
+    }
+
+    private LinearLayout.LayoutParams columnLp(float weight) {
+        // 关键区别：横向排列时 weight 分的是**宽度**，竖向排列时 weight 分的是高度。
+        // 竖向再写 width=0 + weight 会得到零宽的列 —— 整块内容直接消失，
+        // 而且不报错，很难查。
+        if (!wideLayout) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, 0, 0);
+            return lp;
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, weight);
+        // 列之间留一点空隙，否则三栏的卡片会粘成一整片
+        lp.setMargins(dp(5), 0, dp(5), 0);
+        return lp;
+    }
+
+    /** 单列（窄屏）时列与列之间的竖向空隙 */
+    private View vGap() {
+        View v = new View(this);
+        v.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(14)));
+        return v;
+    }
+
+    private LinearLayout.LayoutParams matchWrap() {
+        return new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    }
+
+    /** 左列：传感器清单 + 采样/刷新节奏 */
+    private void buildEditColumn(LinearLayout col) {
+        buildSensors(col);
+        buildRate(col);
+    }
+
+    /** 中列：位置调整 + 布局微调 + 背景与配色 */
+    private void buildPlaceColumn(LinearLayout col) {
+        buildOverlayControl(col);
+        buildLayoutTuning(col);
+        buildAppearance(col);
+        buildTheme(col);
+        buildBatColour(col);
+    }
+
+    /** 右列：自启、Shell 状态、通知、导入导出、历史、插件 */
+    private void buildAdvancedColumn(LinearLayout col) {
+        sectionLabel(col, "ADVANCED SETTINGS");
+        buildSelfStart(col);
+        buildShellState(col);
+        buildNotificationState(col);
+        buildTransfer(col);
+        buildHistory(col);
+        buildPlugins(col);
+    }
+
+    /** 底部悬浮条：全屏预览 + 开关悬浮窗，滚动时始终可见 */
+    private void buildBottomBar(FrameLayout root) {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
+        bar.setBackground(roundRect(0xF00D0C0F, 20f, 0x26FFFFFF));
+
+        TextView full = barButton("\u26F6 全屏预览", false,
+                v -> FullScreenPreview.show(this));
+        bar.addView(full, new LinearLayout.LayoutParams(0, dp(42), 1f));
+
+        toggleBtn = barButton("开启悬浮窗", true, v -> {
+            if (HudState.running) {
+                stopService(new Intent(this, HudService.class));
+                handler.postDelayed(this::syncToggle, 150);
+            } else {
+                startHud();
+            }
+        });
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, dp(42), 1.25f);
+        tlp.leftMargin = dp(8);
+        bar.addView(toggleBtn, tlp);
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.BOTTOM;
+        lp.setMargins(dp(20), 0, dp(20), dp(18));
+        root.addView(bar, lp);
+    }
+
+    private TextView barButton(String text, boolean primary, View.OnClickListener l) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tv.setTypeface(Typeface.MONOSPACE, primary ? Typeface.BOLD : Typeface.NORMAL);
+        tv.setGravity(Gravity.CENTER);
+        tv.setLetterSpacing(0.06f);
+        if (primary) {
+            tv.setTextColor(0xFF14100F);
+            tv.setBackground(roundRect(ACCENT, 14f, 0));
+        } else {
+            tv.setTextColor(TEXT_SOFT);
+            tv.setBackground(roundRect(BG_CHIP, 14f, STROKE_CHIP));
+        }
+        tv.setOnClickListener(l);
+        return tv;
+    }
+
+    // ------------------------------------------------------------------ 左列：传感器行
+
+    /**
+     * 重建"名字 + 实时值"行。
+     *
+     * <p>值本身由 {@link #refreshData()} 每帧塞进去，这里只管结构与交互 ——
+     * 每帧重建 View 会让滚动位置和按下的手感全乱。
+     */
+    private void rebuildRows() {
+        if (rowsBox == null) return;
+        rowsBox.removeAllViews();
+        rowValues.clear();
+
+        if (activeSensors.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("没有启用的传感器");
+            empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
+            empty.setTextColor(TEXT_DIM);
+            empty.setTypeface(Typeface.MONOSPACE);
+            empty.setPadding(dp(2), dp(6), 0, dp(6));
+            rowsBox.addView(empty);
+            return;
+        }
+
+        for (Sensor se : activeSensors) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setBackground(roundRect(BG_CARD, 10f, STROKE_CARD));
+            row.setPadding(dp(10), dp(7), dp(6), dp(7));
+
+            TextView name = new TextView(this);
+            String nm = se.label() == null || se.label().isEmpty() ? "(空)" : se.label();
+            boolean isChart = se.spec.kind == SensorSpec.Kind.CHART;
+            // 曲线项的名字和数据源同名，行首加个符号区分开，否则列表里会出现两个 CPU
+            name.setText((isChart ? "\u223F " : "") + nm.toUpperCase(Locale.US));
+            name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
+            name.setTextColor(TEXT_DIM);
+            name.setTypeface(Typeface.MONOSPACE);
+            name.setSingleLine(true);
+            row.addView(name, new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView val = new TextView(this);
+            val.setText(isChart ? "曲线" : "--");
+            val.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            val.setTextColor(isChart ? TEXT_DIM : TEXT_MAIN);
+            val.setTypeface(Typeface.MONOSPACE);
+            val.setSingleLine(true);
+            row.addView(val);
+
+            // 图表是"按传感器加"的：点一下就为这一项生成一条曲线，
+            // 比先去管理列表里翻"曲线图表"再绑定数据源直观得多。
+            // 已经是曲线的那行改成齿轮，点开调量程/点数（在管理对话框里）。
+            TextView curve = isChart
+                    ? smallButton("\u2699", v -> openSensorManager())
+                    : smallButton("\u223F", v -> addChartFor(se.id()));
+            curve.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            curve.setPadding(dp(8), dp(4), dp(8), dp(4));
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            clp.leftMargin = dp(8);
+            row.addView(curve, clp);
+
+            LinearLayout.LayoutParams rlp = matchWrap();
+            rlp.bottomMargin = dp(5);
+            rowsBox.addView(row, rlp);
+            rowValues.put(se.id(), val);
+        }
+    }
+
+    /** 给某个传感器加一条胶囊曲线并启用 */
+    private void addChartFor(String srcId) {
+        SensorSpec sp = SensorTable.newChart(table, srcId);
+        if (Sensor.find(table, sp.id) == null) table.add(sp);
+        if (!HudState.sensorIds.contains(sp.id)) {
+            HudState.sensorIds = new ArrayList<>(HudState.sensorIds);
+            HudState.sensorIds.add(sp.id);
+        }
+        SensorTable.save(this, table);
+        Prefs.setSensors(this, HudState.sensorIds);
+        applySensors();
+        Toast.makeText(this, "已添加曲线：" + sp.label, Toast.LENGTH_SHORT).show();
+    }
+
+    // ------------------------------------------------------------------ 右列：导入导出
+
+    private void buildTransfer(LinearLayout col) {
+        sectionLabel(col, "IMPORT & EXPORT");
+
+        transferStatus = new TextView(this);
+        transferStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        transferStatus.setTextColor(TEXT_DIM);
+        transferStatus.setTypeface(Typeface.MONOSPACE);
+        transferStatus.setPadding(dp(2), 0, 0, dp(8));
+        col.addView(transferStatus);
+        refreshTransferStatus();
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(smallButton("导出设置\u2026", v -> exportSettings()), weightLp());
+        row.addView(smallButton("导入设置\u2026", v -> importSettings()), weightLp());
+        col.addView(row);
+
+        TextView note = new TextView(this);
+        note.setText("含：外观 / 布局 / 传感器表 / 启用项 / 机型信息\n"
+                + "不含：背景图（指向本机私有文件）\n"
+                + "机型不同会先弹警告，可选择只导外观");
+        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        note.setTextColor(0xFF3E383D);
+        note.setTypeface(Typeface.MONOSPACE);
+        note.setPadding(dp(2), dp(7), 0, dp(16));
+        col.addView(note);
+    }
+
+    private void refreshTransferStatus() {
+        if (transferStatus == null) return;
+        transferStatus.setText("当前 " + Prefs.snapshot(this).size() + " 项偏好 · 传感器表 "
+                + table.size() + " 项");
+    }
+
+    private void exportSettings() {
+        try {
+            Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("application/json");
+            i.putExtra(Intent.EXTRA_TITLE, SettingsTransfer.suggestName());
+            startActivityForResult(i, REQ_EXPORT_SETTINGS);
+        } catch (Exception e) {
+            Toast.makeText(this, "打不开保存界面：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void importSettings() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            // 有些文件管理器把 .json 标成 octet-stream，收窄类型会选不到文件
+            i.setType("*/*");
+            startActivityForResult(i, REQ_IMPORT_SETTINGS);
+        } catch (Exception e) {
+            Toast.makeText(this, "打不开文件选择器：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void doExportSettings(final Uri uri) {
+        new Thread(() -> {
+            String err = null;
+            try (java.io.OutputStream os = getContentResolver().openOutputStream(uri)) {
+                if (os == null) throw new IllegalStateException("无法写入");
+                SettingsTransfer.write(this, os);
+            } catch (Exception e) {
+                err = e.getMessage();
+            }
+            final String ferr = err;
+            runOnUiThread(() -> Toast.makeText(this,
+                    ferr == null ? "设置已导出" : "导出失败：" + ferr,
+                    Toast.LENGTH_LONG).show());
+        }, "settings-export").start();
+    }
+
+    private void doImportSettings(final Uri uri) {
+        new Thread(() -> {
+            SettingsTransfer.Preview pv = null;
+            String err = null;
+            try (java.io.InputStream is = getContentResolver().openInputStream(uri)) {
+                if (is == null) throw new IllegalStateException("读不到文件");
+                pv = SettingsTransfer.peek(this, is);
+            } catch (Exception e) {
+                err = e.getMessage();
+            }
+            final SettingsTransfer.Preview fpv = pv;
+            final String ferr = err;
+            runOnUiThread(() -> {
+                if (fpv == null) {
+                    Toast.makeText(this, "导入失败：" + ferr, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                confirmImport(fpv);
+            });
+        }, "settings-import").start();
+    }
+
+    /**
+     * 导入确认。
+     *
+     * <p>机型不一致时给三个选项：全部导入 / 只导外观 / 取消。
+     * 之所以不直接拒绝：换机迁移时用户**就是**想把外观搬过去，
+     * 但传感器表一定得留在本机重新探测，否则条上会挂一堆读不到值的项。
+     */
+    private void confirmImport(final SettingsTransfer.Preview pv) {
+        StringBuilder sb = new StringBuilder();
+        for (String line : SettingsTransfer.summary(pv)) sb.append(line).append('\n');
+
+        if (!pv.sameDevice) {
+            sb.append('\n').append("\u26A0 机型不一致\n");
+            sb.append("来源：").append(pv.sourceDevice).append('\n');
+            sb.append("本机：").append(pv.localDevice).append('\n');
+            sb.append("传感器表是按机型探测的，直接导入可能得到一堆读不到值的项。\n")
+                    .append("建议选「仅导入外观」——保留本机传感器表。");
+        }
+
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this)
+                .setTitle(pv.sameDevice ? "导入设置" : "导入设置（机型不同）")
+                .setMessage(sb.toString())
+                .setNegativeButton("取消", null);
+
+        if (pv.sameDevice) {
+            b.setPositiveButton("全部导入", (d, w) -> applyImport(pv, true));
+        } else {
+            b.setPositiveButton("仅导入外观", (d, w) -> applyImport(pv, false));
+            b.setNeutralButton("仍然全部导入", (d, w) -> applyImport(pv, true));
+        }
+        b.show();
+    }
+
+    private void applyImport(SettingsTransfer.Preview pv, boolean includeSensors) {
+        try {
+            int n = SettingsTransfer.apply(this, pv, includeSensors);
+
+            // 表可能被整体替换过，必须重新读盘并重建全部派生对象
+            table = SensorTable.load(this);
+            HudState.sensorIds = Prefs.sensors(this);
+            activeSensors = Sensor.resolve(table, HudState.sensorIds);
+            if (activeSensors.isEmpty()) {
+                HudState.sensorIds = new ArrayList<>(SensorTable.DEFAULT_IDS);
+                activeSensors = Sensor.resolve(table, HudState.sensorIds);
+            }
+            if (preview != null) preview.setSensors(activeSensors);
+            applyLayoutToPreview();
+            rebuildCards();
+            rebuildRows();
+            updateSensorSummary();
+            refreshSteppers();
+            syncSystemState();
+            refreshSampleChips();
+            refreshRateChips();
+            refreshTransferStatus();
+            HudState.bump();
+
+            Toast.makeText(this, "已导入 " + n + " 项" + (includeSensors ? "" : "（保留本机传感器表）"),
+                    Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "导入失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    // ------------------------------------------------------------------ 右列：历史记录
+
+    private void buildHistory(LinearLayout col) {
+        sectionLabel(col, "RECORD HISTORY");
+
+        historyStatus = new TextView(this);
+        historyStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        historyStatus.setTextColor(TEXT_DIM);
+        historyStatus.setTypeface(Typeface.MONOSPACE);
+        historyStatus.setPadding(dp(2), 0, 0, dp(8));
+        col.addView(historyStatus);
+        refreshHistoryStatus();
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(smallButton("开始 / 停止", v -> toggleRecording()), weightLp());
+        row.addView(stepper("间隔", () -> Prefs.historyIntervalMs(this) + "ms", () -> {
+            Prefs.setHistoryIntervalMs(this, clamp(Prefs.historyIntervalMs(this) + 250,
+                    250, 60000));
+            refreshHistoryStatus();
+        }, () -> {
+            Prefs.setHistoryIntervalMs(this, clamp(Prefs.historyIntervalMs(this) - 250,
+                    250, 60000));
+            refreshHistoryStatus();
+        }), weightLp());
+        col.addView(row);
+        col.addView(spacer(6));
+
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        row2.addView(smallButton("导出 CSV\u2026", v -> exportHistory()), weightLp());
+        row2.addView(smallButton("清空记录", v -> clearHistory()), weightLp());
+        col.addView(row2);
+
+        TextView note = new TextView(this);
+        note.setText("记录跟随采样节奏，息屏采样停止时一并暂停。\n"
+                + "CSV 以 # 注释开头，写清机型 / SoC / 间隔，\n"
+                + "Excel 与 pandas 都能直接读。");
+        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        note.setTextColor(0xFF3E383D);
+        note.setTypeface(Typeface.MONOSPACE);
+        note.setPadding(dp(2), dp(7), 0, dp(16));
+        col.addView(note);
+    }
+
+    private void refreshHistoryStatus() {
+        if (historyStatus == null) return;
+        if (HistoryRecorder.isRecording()) {
+            java.io.File f = HistoryRecorder.currentFile();
+            historyStatus.setText(String.format(Locale.US,
+                    "\u25CF 记录中 · %d 行 · %s · %s",
+                    HistoryRecorder.rows(), fmtDuration(HistoryRecorder.durationMs()),
+                    f == null ? "" : (f.length() / 1024) + " KB"));
+            historyStatus.setTextColor(ACCENT);
+        } else {
+            int n = HistoryRecorder.files(this).size();
+            long bytes = HistoryRecorder.totalBytes(this);
+            historyStatus.setText("\u25CB 未记录 · 已有 " + n + " 个文件 · "
+                    + (bytes / 1024) + " KB · 间隔 " + Prefs.historyIntervalMs(this) + "ms");
+            historyStatus.setTextColor(TEXT_DIM);
+        }
+    }
+
+    private static String fmtDuration(long ms) {
+        long s = ms / 1000;
+        return String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60);
+    }
+
+    private void toggleRecording() {
+        if (HistoryRecorder.isRecording()) {
+            long rows = HistoryRecorder.rows();
+            java.io.File f = HistoryRecorder.stop();
+            Toast.makeText(this, "已停止记录：" + rows + " 行"
+                    + (f == null ? "" : " · " + f.getName()), Toast.LENGTH_LONG).show();
+        } else {
+            List<String> ids = new ArrayList<>();
+            for (Sensor se : activeSensors) ids.add(se.id());
+            boolean ok = HistoryRecorder.start(this, ids, Prefs.historyIntervalMs(this));
+            Toast.makeText(this, ok
+                            ? "开始记录 · 间隔 " + Prefs.historyIntervalMs(this) + "ms · "
+                            + ids.size() + " 个通道"
+                            : "启动失败：没有启用的传感器？",
+                    Toast.LENGTH_LONG).show();
+        }
+        refreshHistoryStatus();
+    }
+
+    private void exportHistory() {
+        java.io.File f = HistoryRecorder.isRecording()
+                ? HistoryRecorder.currentFile() : null;
+        if (f == null) {
+            List<java.io.File> all = HistoryRecorder.files(this);
+            if (!all.isEmpty()) f = all.get(0);
+        }
+        if (f == null) {
+            Toast.makeText(this, "还没有任何记录", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        pendingHistoryExport = f;
+        try {
+            Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("text/csv");
+            i.putExtra(Intent.EXTRA_TITLE, f.getName());
+            startActivityForResult(i, REQ_EXPORT_HISTORY);
+        } catch (Exception e) {
+            Toast.makeText(this, "打不开保存界面：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void exportHistoryTo(final Uri target, final java.io.File src) {
+        new Thread(() -> {
+            String err = null;
+            try {
+                HistoryRecorder.export(this, target, src);
+            } catch (Exception e) {
+                err = e.getMessage();
+            }
+            final String ferr = err;
+            runOnUiThread(() -> Toast.makeText(this,
+                    ferr == null ? "已导出 " + src.getName() : "导出失败：" + ferr,
+                    Toast.LENGTH_LONG).show());
+        }, "history-export").start();
+    }
+
+    private void clearHistory() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("清空记录")
+                .setMessage("会删除应用私有目录下的全部历史 CSV，已导出的文件不受影响。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (d, w) -> {
+                    HistoryRecorder.deleteAll(this);
+                    refreshHistoryStatus();
+                    Toast.makeText(this, "已清空", Toast.LENGTH_SHORT).show();
+                })
+                .show();
+    }
+
+    // ------------------------------------------------------------------ 右列：插件
+
+    private void buildPlugins(LinearLayout col) {
+        sectionLabel(col, "PLUGINS");
+
+        pluginStatus = new TextView(this);
+        pluginStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        pluginStatus.setTextColor(TEXT_DIM);
+        pluginStatus.setTypeface(Typeface.MONOSPACE);
+        pluginStatus.setPadding(dp(2), 0, 0, dp(8));
+        col.addView(pluginStatus);
+        refreshPluginStatus();
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(smallButton("导入插件\u2026", v -> importPlugin()), weightLp());
+        row.addView(smallButton("重新加载", v -> reloadPlugins()), weightLp());
+        col.addView(row);
+
+        TextView note = new TextView(this);
+        note.setText("插件是声明式 JSON：只能写公式，不能执行代码。\n"
+                + "放 files/plugins/*.json，示例文件已生成。\n"
+                + "表达式用安全名引用传感器：batt_cur / agg_cpu，\n"
+                + "支持 if(agg_cpu > 45, 1, 0) 这种阈值判断");
+        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f);
+        note.setTextColor(0xFF3E383D);
+        note.setTypeface(Typeface.MONOSPACE);
+        note.setPadding(dp(2), dp(7), 0, dp(4));
+        col.addView(note);
+    }
+
+    private void refreshPluginStatus() {
+        if (pluginStatus == null) return;
+        List<PluginHost.Metric> ms = PluginHost.metrics();
+        List<String> warns = PluginHost.warnings();
+        StringBuilder sb = new StringBuilder();
+        sb.append("\u25CF ").append(ms.size()).append(" 个插件指标 · ")
+                .append(PluginHost.fileNames(this).size()).append(" 个文件");
+        if (!warns.isEmpty()) {
+            sb.append(" · ").append(warns.size()).append(" 个问题");
+        }
+        pluginStatus.setText(sb.toString());
+        pluginStatus.setTextColor(warns.isEmpty() ? TEXT_DIM : 0xFFFFB74D);
+
+        if (!warns.isEmpty()) {
+            // 只显示前两条，多了会把整列顶开
+            StringBuilder d = new StringBuilder("以下插件未能加载：\n");
+            for (int i = 0; i < Math.min(2, warns.size()); i++) {
+                d.append("· ").append(warns.get(i)).append('\n');
+            }
+            pluginStatus.setText(sb + "\n" + d.toString().trim());
+        }
+    }
+
+    private void importPlugin() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            startActivityForResult(i, REQ_IMPORT_PLUGIN);
+        } catch (Exception e) {
+            Toast.makeText(this, "打不开文件选择器：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void doImportPlugin(final Uri uri) {
+        new Thread(() -> {
+            String err = null;
+            String name = null;
+            try {
+                name = PluginHost.importFrom(this, uri);
+            } catch (Exception e) {
+                err = e.getMessage();
+            }
+            final String ferr = err;
+            final String fname = name;
+            runOnUiThread(() -> {
+                if (fname == null) {
+                    Toast.makeText(this, "插件导入失败：" + ferr, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                reloadPlugins();
+                Toast.makeText(this, "已导入 " + fname, Toast.LENGTH_SHORT).show();
+            });
+        }, "plugin-import").start();
+    }
+
+    private void reloadPlugins() {
+        // force：用户点"重新加载"就是要把刚改的文件读进来，不能被节流挡回去
+        PluginHost.load(this, true);
+        List<SensorSpec> next = SensorTable.ensurePlugins(this, table);
+        if (next != null) table = next;
+        applySensors();
+        refreshPluginStatus();
+        refreshTransferStatus();
     }
 
     // ------------------------------------------------------------------ 控件工厂

@@ -109,7 +109,12 @@ public class HudService extends Service {
                 DataCollector.maybeLearnDischargeSign(HudService.this, s);
 
                 List<Sensor> list = sensors;
-                if (list != null) sampler.offer(s, list);
+                if (list != null) {
+                    Map<String, Float> raw = sampler.offer(s, list);
+                    // 历史记录跟着采样走：采样停了记录就停，
+                    // 这样"记录中"不会和"息屏省电"打架
+                    if (HistoryRecorder.isRecording()) HistoryRecorder.offer(raw);
+                }
             } catch (Exception ignored) {
             }
             bg.postDelayed(this, sampleMs());
@@ -510,6 +515,10 @@ public class HudService extends Service {
         int shown = 0;
         for (Sensor s : list) {
             if (shown >= NOTIF_SENSORS) break;
+            // 曲线和占位块在通知里没有可读的数值，跳过它们取下一个真实指标，
+            // 否则第一行会出现"CPU "这种只有标签的片段
+            if (s.spec.kind == SensorSpec.Kind.CHART
+                    || s.spec.kind == SensorSpec.Kind.PLACEHOLDER) continue;
             if (shown > 0) sb.append("  ");
 
             SensorSpec sp = s.spec;

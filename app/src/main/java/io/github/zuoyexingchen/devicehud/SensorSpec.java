@@ -41,7 +41,20 @@ public final class SensorSpec {
          */
         BT_BATT,
         /** 占位方块：不显示任何文字，只按 arg 个空格占住长度，用于避开打孔区域 */
-        PLACEHOLDER
+        PLACEHOLDER,
+        /**
+         * 胶囊图表：把 {@link #src} 指向的传感器最近若干个采样点画成 sparkline。
+         *
+         * <p>本身不读硬件，数据来自 {@link ChartHistory}；量程由
+         * {@link #chartMode} / {@link #chartMin} / {@link #chartMax} 决定。
+         */
+        CHART,
+        /**
+         * 插件指标：值由 {@link #expr} 在 {@link PluginHost} 里求值得到。
+         *
+         * <p>表达式里只能用"安全名"（把 id 里的 - 换成 _），例如 {@code batt_cur}。
+         */
+        PLUGIN
     }
 
     public enum Role {
@@ -67,6 +80,24 @@ public final class SensorSpec {
     public boolean bold = false;
     public boolean italic = false;
 
+    // —— 图表 / 插件扩展（老配置里这些字段不存在，解码时按默认值补齐）
+    /** CHART：数据源传感器 id；PLUGIN：保留为空 */
+    public String src = "";
+    /** CHART：保留多少个采样点（1~300） */
+    public int chartPoints = 96;
+    /** CHART：0 = 自动量程，1 = 手动量程 */
+    public int chartMode = CHART_AUTO;
+    /** CHART：手动量程下限 */
+    public float chartMin = 0f;
+    /** CHART：手动量程上限 */
+    public float chartMax = 100f;
+    /** PLUGIN：表达式源码 */
+    public String expr = "";
+
+    public static final int CHART_AUTO = 0;
+    public static final int CHART_MANUAL = 1;
+    public static final String[] CHART_MODE_NAMES = {"自动量程", "手动量程"};
+
     public SensorSpec(String id, String label, String unit, Kind kind, int arg,
                       int decimals, Role role) {
         this.id = id;
@@ -85,6 +116,12 @@ public final class SensorSpec {
         s.bold = bold;
         s.italic = italic;
         s.desc = desc;
+        s.src = src;
+        s.chartPoints = chartPoints;
+        s.chartMode = chartMode;
+        s.chartMin = chartMin;
+        s.chartMax = chartMax;
+        s.expr = expr;
         return s;
     }
 
@@ -92,7 +129,11 @@ public final class SensorSpec {
         return id + "|" + safe(label) + "|" + safe(unit) + "|" + kind.name()
                 + "|" + arg + "|" + decimals + "|" + role.name()
                 + "|" + color + "|" + textSp + "|" + (bold ? 1 : 0) + "|" + (italic ? 1 : 0)
-                + "|" + safe(desc);
+                + "|" + safe(desc)
+                // 扩展字段一律追加在末尾：老版本读到第 12 个字段就停，
+                // 新版本按长度判断有没有这些字段，双向兼容
+                + "|" + safe(src) + "|" + chartPoints + "|" + chartMode
+                + "|" + chartMin + "|" + chartMax + "|" + safe(expr);
     }
 
     private static String safe(String s) {
@@ -116,6 +157,16 @@ public final class SensorSpec {
                 s.italic = "1".equals(p[10]);
             }
             if (p.length >= 12) s.desc = p[11];
+            // 第 12 项起是图表/插件扩展字段，老配置没有，保持默认值即可
+            if (p.length >= 17) {
+                s.src = p[12];
+                s.chartPoints = clampInt(parseInt(p[13], 96), 8, ChartHistory.CAPACITY);
+                s.chartMode = parseInt(p[14], CHART_AUTO) == CHART_MANUAL
+                        ? CHART_MANUAL : CHART_AUTO;
+                s.chartMin = parseFloat(p[15], 0f);
+                s.chartMax = parseFloat(p[16], 100f);
+            }
+            if (p.length >= 18) s.expr = p[17];
             return s;
         } catch (Exception e) {
             return null;
@@ -129,6 +180,14 @@ public final class SensorSpec {
         if (kind == Kind.PLACEHOLDER) {
             return "占位方块  \u00B7  " + Math.max(1, arg) + " 空格";
         }
+        if (kind == Kind.CHART) {
+            return "曲线图表  \u00B7  " + (src == null || src.isEmpty() ? "未绑定数据源" : src)
+                    + "  \u00B7  " + chartPoints + " 点  \u00B7  "
+                    + CHART_MODE_NAMES[chartMode == CHART_MANUAL ? 1 : 0];
+        }
+        if (kind == Kind.PLUGIN) {
+            return "插件指标  \u00B7  " + (desc == null || desc.isEmpty() ? id : desc);
+        }
         if (desc == null || desc.isEmpty()) return label == null || label.isEmpty() ? id : label;
         if (label == null || label.isEmpty()) return desc;
         return desc + "  \u00B7  " + label;
@@ -137,5 +196,33 @@ public final class SensorSpec {
     public String format(float v) {
         if (Float.isNaN(v) || Float.isInfinite(v)) return "--";
         return String.format(Locale.US, "%." + decimals + "f", v);
+    }
+
+    // ------------------------------------------------------------------ 解析工具
+
+    /**
+     * 扩展字段的容错解析。
+     *
+     * <p>传感器表是用户长期持有的文本，不允许因为某个字段写坏了就整行解码失败 ——
+     * 那样用户会莫名其妙丢掉整张表。所以这里一律退到默认值。
+     */
+    private static int parseInt(String s, int def) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    private static float parseFloat(String s, float def) {
+        try {
+            return Float.parseFloat(s.trim());
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    private static int clampInt(int v, int lo, int hi) {
+        return v < lo ? lo : (v > hi ? hi : v);
     }
 }

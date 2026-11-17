@@ -36,19 +36,28 @@ public final class Sampler {
 
     private final Map<String, Acc> accs = new HashMap<>();
 
-    /** 喂入一次采样，值为 NaN 的通道直接丢弃，不污染均值 */
-    public void offer(DataCollector.Snapshot s, List<Sensor> sensors) {
-        if (s == null || sensors == null) return;
-        for (Sensor se : sensors) {
-            float v = se.read(s);
+    /**
+     * 喂入一次采样，值为 NaN 的通道直接丢弃，不污染均值。
+     *
+     * @return 本次采样算出的原始值（未经区间平均），给历史记录用
+     */
+    public Map<String, Float> offer(DataCollector.Snapshot s, List<Sensor> sensors) {
+        if (s == null || sensors == null) return java.util.Collections.emptyMap();
+        // 走 readAll：插件指标依赖别的传感器，必须两趟算；
+        // 顺便把整组值喂给曲线图的历史缓冲 —— 采样点就是图表的原始数据
+        Map<String, Float> vals = Sensor.readAll(sensors, s);
+        ChartHistory.observe(vals);
+        for (Map.Entry<String, Float> e : vals.entrySet()) {
+            float v = e.getValue();
             if (Float.isNaN(v) || Float.isInfinite(v)) continue;
-            Acc a = accs.get(se.id());
+            Acc a = accs.get(e.getKey());
             if (a == null) {
                 a = new Acc();
-                accs.put(se.id(), a);
+                accs.put(e.getKey(), a);
             }
             a.add(v);
         }
+        return vals;
     }
 
     /** 取出区间均值并清空。返回 id -> 平均值 */

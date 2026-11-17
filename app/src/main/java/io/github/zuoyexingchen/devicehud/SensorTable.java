@@ -136,15 +136,104 @@ public final class SensorTable {
             List<SensorSpec> t = probe();
             save(c, t);
             Prefs.setTableVersion(c, TABLE_VERSION);
-            return t;
+            PluginHost.load(c);
+            return withPlugins(c, t);
         }
         List<SensorSpec> out = decodeAll(Prefs.sensorTable(c));
-        if (!out.isEmpty()) return out;
+        PluginHost.load(c);
+        if (!out.isEmpty()) return withPlugins(c, out);
 
         out = probe();
         save(c, out);
         Prefs.setTableVersion(c, TABLE_VERSION);
-        return out;
+        return withPlugins(c, out);
+    }
+
+    /**
+     * ensurePlugins 在没有变化时返回 null（这是给它自己的调用方省事的约定），
+     * 但 load() 的契约是"一定给一张可用的表"，所以这里必须兜一层。
+     */
+    private static List<SensorSpec> withPlugins(Context c, List<SensorSpec> table) {
+        List<SensorSpec> next = ensurePlugins(c, table);
+        return next != null ? next : table;
+    }
+
+    /**
+     * 把插件指标同步进表：新增的补上、表达式变了的更新、文件删掉的移除。
+     *
+     * <p>和蓝牙不同，插件是"配置文件驱动"的，所以这里必须支持双向同步 ——
+     * 用户删掉 json 之后那些指标要真的消失，否则表里会留一堆永远算不出来的孤儿项。
+     *
+     * @return 有变化返回新表，没变化返回 null（调用方可以省掉一次重排与落盘）
+     */
+    public static List<SensorSpec> ensurePlugins(Context c, List<SensorSpec> table) {
+        if (table == null) return null;
+
+        java.util.Map<String, SensorSpec> old = new java.util.HashMap<>();
+        List<SensorSpec> base = new ArrayList<>();
+        for (SensorSpec s : table) {
+            if (s.id.startsWith(PluginHost.ID_PREFIX)) old.put(s.id, s);
+            else base.add(s);
+        }
+
+        List<SensorSpec> fresh = new ArrayList<>();
+        for (PluginHost.Metric m : PluginHost.metrics()) fresh.add(PluginHost.toSpec(m));
+
+        boolean same = fresh.size() == old.size();
+        if (same) {
+            for (SensorSpec s : fresh) {
+                SensorSpec prev = old.get(s.id);
+                if (prev == null || !prev.expr.equals(s.expr) || !prev.label.equals(s.label)
+                        || !prev.desc.equals(s.desc) || prev.decimals != s.decimals
+                        || prev.role != s.role) {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if (same) return null;
+
+        // 插在占位方块之前：插件属于"普通指标"，占位块是打孔适配，应该留在末尾附近
+        int pos = base.size();
+        for (int i = 0; i < base.size(); i++) {
+            if (base.get(i).kind == SensorSpec.Kind.PLACEHOLDER) {
+                pos = i;
+                break;
+            }
+        }
+        base.addAll(pos, fresh);
+        save(c, base);
+        return base;
+    }
+
+    /** 新建一个绑定到 srcId 的曲线图表项；同源已存在时直接返回已有的 */
+    public static SensorSpec newChart(List<SensorSpec> table, String srcId) {
+        String id = "chart-" + srcId;
+        for (SensorSpec s : table) {
+            if (s.id.equals(id)) return s;
+        }
+        SensorSpec src = findById(table, srcId);
+        String label = (src == null || src.label == null || src.label.isEmpty())
+                ? "CHART" : src.label;
+        SensorSpec sp = new SensorSpec(id, label, "", SensorSpec.Kind.CHART, 0, 0,
+                src != null ? src.role : SensorSpec.Role.PLAIN);
+        sp.src = srcId;
+        sp.chartPoints = 96;
+        sp.chartMode = SensorSpec.CHART_AUTO;
+        sp.desc = "曲线：" + (src == null ? srcId : src.displayTitle());
+        return sp;
+    }
+
+    /** 删掉某个图表项（图表是用户加的，需要能清掉） */
+    public static boolean remove(List<SensorSpec> table, String id) {
+        if (table == null) return false;
+        for (int i = 0; i < table.size(); i++) {
+            if (table.get(i).id.equals(id)) {
+                table.remove(i);
+                return true;
+            }
+        }
+        return false;
     }
 
     public static void save(Context c, List<SensorSpec> list) {
